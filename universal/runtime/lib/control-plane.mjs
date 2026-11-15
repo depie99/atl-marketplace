@@ -1,0 +1,255 @@
+import fs from "node:fs";
+import path from "node:path";
+import { loadState, paths } from "./state.mjs";
+import { browserAccessPolicy } from "./browser-access.mjs";
+import { resourcePolicy, taskResourcePreview } from "./resource-policy.mjs";
+import {executionReports,loadResourceLearning} from './execution-report.mjs';
+import { providerProfile } from './providers.mjs';
+import { loadQueueBook, queueList } from "./queue.mjs";
+import { listNotifications, notificationUnreadCount } from "./notifications.mjs";
+import { loadUsage, latestUsage } from "./usage.mjs";
+import { pendingFeedback } from "./feedback.mjs";
+import { CONTRACTS } from "./roles.mjs";
+import { readOvernightRun, readManagerConfig } from "./launch.mjs";
+import { listClaims, sourceStatus } from "./brain.mjs";
+import { listRoutines, listSkills, staleClaims } from "./governance.mjs";
+import { approvalSnapshot } from "./approvals.mjs";
+import { supervisorSnapshot } from "./supervisor.mjs";
+import { reconcileLeases } from "./leases.mjs";
+import { listBackups } from "./backup.mjs";
+import { listRoutineRuns, schedulerStatus } from "./routines.mjs";
+import { bundledRoot } from "./skill-router.mjs";
+import { listBatches } from "./batch-runner.mjs";
+import { claimStates, latestFailureSignatures, preventionStatus, recoverMemory } from "./operational-memory.mjs";
+import { outcomeReportFromRoot } from "./outcome-economics.mjs";
+import { listDeliveryPackets } from "./delivery.mjs";
+
+// Inventory only: installed skill metadata is not promotion evidence.
+function installedSkills(root) {
+  const found = new Map();
+  for (const base of [path.join(root, ".agents", "skills"), path.join(root, "skills"), path.join(bundledRoot(), "skills")]) {
+    let dirs;
+    try { dirs = fs.readdirSync(base, { withFileTypes: true }); } catch { continue; }
+    for (const dir of dirs) {
+      if (!dir.isDirectory() || found.has(dir.name)) continue;
+      try {
+        const text = fs.readFileSync(path.join(base, dir.name, "SKILL.md"), "utf8");
+        const frontmatter = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+        const description = frontmatter?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim() || "No description provided.";
+        found.set(dir.name, { id: dir.name, description, project_installed: base === path.join(root, ".agents", "skills") });
+      } catch { /* No readable skill manifest. */ }
+    }
+  }
+  return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export const CONTROL_PLANE_VERSION = 1;
+
+// Human phase labels per task status, used by the Team page role cards.
+export const ROLE_PHASE = {
+  triaged: "awaiting assignment",
+  assigned: "ready to start",
+  in_progress: "working",
+  in_review: "independent review",
+  verifying: "verification",
+  blocked: "blocked — manager action",
+  escalated: "escalated to owner",
+  done: "shipped",
+  rejected: "rejected",
+  archived: "archived",
+};
+
+// One scan of the overnight directory → the newest session summary per role.
+// Session summaries are the durable completion briefs written by the runner.
+function latestRoleSessions(root) {
+  const base = path.join(root, ".trust", "manager", "overnight");
+  const newest = {};
+  let taskDirs = [];
+  try {
+    taskDirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return newest;
+  }
+  for (const taskId of taskDirs) {
+    let files = [];
+    try {
+      files = fs.readdirSync(path.join(base, taskId)).filter((f) => f.startsWith("session-") && f.endsWith(".json")).sort();
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      try {
+        const summary = JSON.parse(fs.readFileSync(path.join(base, taskId, file), "utf8"));
+        if (!summary?.role) continue;
+        const prev = newest[summary.role];
+        if (!prev || String(summary.finishedAt || "").localeCompare(String(prev.summary?.finishedAt || "")) >= 0) {
+          newest[summary.role] = {
+            taskId,
+            logPath: path.join(base, taskId, file.replace(/\.json$/i, ".log")),
+            summary,
+          };
+        }
+      } catch {
+        // A torn summary file must never break the team view.
+      }
+    }
+  }
+  return newest;
+}
+
+function latestBriefRecord(root) {
+  const dir = paths(root).briefs;
+  try {
+    const name = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort().at(-1);
+    if (!name) return null;
+    const full = path.join(dir, name);
+    return { name, path: full, at: fs.statSync(full).mtime.toISOString() };
+  } catch {
+    return null;
+  }
+}
+
+function teamRoles(root, state, queues, sessions, brief) {
+  const tasks = state.tasks || {};
+  const queueOf = new Map();
+  for (const queue of queues) {
+    for (const item of queue.items || []) if (!queueOf.has(item.id)) queueOf.set(item.id, queue.id);
+  }
+  return Object.keys(CONTRACTS).map((role) => {
+    const assigned = Object.values(tasks)
+      .filter((task) => task.assigned_worker === role && !["done", "rejected", "archived"].includes(task.status))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    const task = assigned[0] || null;
+    const session = sessions[role] || null;
+    let feedback = null;
+    if (task) {
+      const pending = pendingFeedback(root, { taskId: task.id, role });
+      if (pending.length) feedback = { pending: pending.length, latest: pending.at(-1).id };
+    }
+    return {
+      role,
+      mission: CONTRACTS[role].mission,
+      taskId: task?.id || session?.taskId || null,
+      taskTitle: task?.title || null,
+      taskStatus: task?.status || null,
+      queueId: task ? queueOf.get(task.id) || null : null,
+      provider: session?.summary?.worker || null,
+      model: session?.summary?.model || null,
+      phase: ROLE_PHASE[task?.status] || "idle",
+      session: session
+        ? {
+            n: session.summary.session ?? null,
+            logPath: session.logPath,
+            finishedAt: session.summary.finishedAt || null,
+            checkpoint: session.summary.checkpoint || null,
+          }
+        : null,
+      latestBrief: brief,
+      feedback,
+    };
+  });
+}
+
+export function createControlPlaneSnapshot(root, { queueId = null, notificationLimit = 50 } = {}) {
+  const state = loadState(root);
+  const queueBook = loadQueueBook(root);
+  const activeQueueId = queueId || queueBook.active_queue;
+  const queues = queueList(root, { includeArchived: false });
+  const notifications = listNotifications(root, { limit: notificationLimit });
+  const usage = loadUsage(root);
+  const brief = latestBriefRecord(root);
+  const resourceConfig=readManagerConfig(root);
+  const resourceProfile=providerProfile(resourceConfig);
+  const reports=executionReports(root,state,queues);
+  return {
+    version: CONTROL_PLANE_VERSION,
+    captured_at: new Date().toISOString(),
+    browser_access: browserAccessPolicy(root),
+    resource_policy: resourcePolicy(resourceConfig),
+    state: {
+      version: state.version,
+      updated_at: state.updated_at,
+      task_count: Object.keys(state.tasks || {}).length,
+      tasks: Object.fromEntries(Object.entries(state.tasks).map(([id,task])=>[id,{...task,execution_report:reports.tasks[id],resource_preview:taskResourcePreview(resourceConfig,task,null,{profile:resourceProfile})}])),
+      log_tail: (state.log || []).slice(-50),
+    },
+    queues: {
+      active_queue: activeQueueId,
+      book_updated_at: queueBook.updated_at,
+      items: queues.map(queue=>({...queue,execution_report:reports.queues[queue.id]})),
+    },
+    notifications: {
+      unread: notificationUnreadCount(root),
+      items: notifications,
+    },
+    usage: {
+      learning:loadResourceLearning(root),
+      updated_at: usage.updated_at,
+      snapshots: usage.snapshots,
+      latest: latestUsage(root),
+      default_provider: readManagerConfig(root).providers?.use || readManagerConfig(root).providers?.default || "codex",
+      economics: (() => {
+        try {
+          const pendingReviews = Object.values(state.tasks || {}).filter((task) => task.review_required && task.status !== "done" && task.status !== "archived").length;
+          return outcomeReportFromRoot(root, { review: { pending: pendingReviews, limit: Number(readManagerConfig(root).resource?.review_wip_limit) || 3 } });
+        } catch (error) {
+          return { summary: { denominators: {}, outcomes: {}, usage: { coverage: "unknown" }, coverage_gaps: [{ kind: "economics-unavailable", detail: error.message }] }, admission: null, review: null };
+        }
+      })(),
+      reliability: (() => {
+        const tasks=Object.values(state.tasks||{}),active=tasks.filter(task=>task.status!=='triaged');
+        const sessions=Object.values(reports.tasks||{}).flatMap(task=>task.timeline||[]);
+        const exited=sessions.filter(row=>Number.isInteger(row.exitCode));
+        const packets=listDeliveryPackets(root).filter(packet=>packet.task_id);
+        const packetTasks=new Map();for(const packet of packets)packetTasks.set(packet.task_id,[...(packetTasks.get(packet.task_id)||[]),packet]);
+        const sessionTaskIds=new Set(sessions.map(row=>row.taskId).filter(Boolean));
+        const verifiedTasks=[...sessionTaskIds].filter(id=>(packetTasks.get(id)||[]).some(packet=>packet.verdict==='verified-local'||packet.receipt?.claimed_verdict==='verified-local')).length;
+        const counts={session_exit:exited.filter(row=>row.exitCode===0&&!row.timedOut).length,task_verified_local:verifiedTasks,needs_review:active.filter(task=>task.status==='in_review'||task.status==='verifying').length,blocked:active.filter(task=>task.status==='blocked'||task.status==='escalated').length,owner_abandoned:null};
+        const denominators={session_exit:exited.length,task_verified_local:sessionTaskIds.size,needs_review:active.length,blocked:active.length,owner_abandoned:null};
+        const samples={...denominators},minimum=20;
+        const rates=Object.fromEntries(Object.keys(counts).map(key=>[key,counts[key]!=null&&denominators[key]>=minimum?counts[key]/denominators[key]:null]));
+        const observed=[...sessions.map(row=>row.finishedAt||row.startedAt),...tasks.map(task=>task.updated_at)].filter(Boolean).sort().at(-1)||state.updated_at||null;
+        return {source:'recorded-session-exits-and-current-task-state',cohort:'all locally recorded sessions and current project tasks',sample_size:active.length,minimum_sample:minimum,observed_at:observed,counts,denominators,samples,rates,rate_status:'per-metric minimum sample; owner-abandoned is not recorded'};
+      })(),
+    },
+    overnight: readOvernightRun(root),
+    batches: (() => { try { return listBatches(root); } catch { return []; } })(),
+    team: teamRoles(root, state, queues, latestRoleSessions(root), brief),
+    brain: {
+      sources: sourceStatus(root),
+      claims: listClaims(root),
+      stale: staleClaims(root, { maxAgeDays: 30 }),
+      skills: listSkills(root),
+      installed_skills: installedSkills(root),
+      routines: listRoutines(root),
+      defaults: { freshness_days: 30, approval_owner: "manager", routines_enabled_by_default: false },
+    },
+    operational: (() => {
+      try {
+        return {
+          recovery: recoverMemory(root),
+          signatures: latestFailureSignatures(root, { limit: 5 }),
+          preventions: preventionStatus(root),
+          claims: claimStates(listClaims(root).map((claim) => ({
+            claim_id: claim.claim_id,
+            subject: claim.subject || claim.source_id,
+            predicate: "statement",
+            value: claim.text,
+            source_id: claim.source_id,
+            source_revision: claim.source_revision,
+            status: claim.status,
+            valid_until: claim.valid_until || null,
+          }))),
+        };
+      } catch (error) {
+        return { recovery: { status: "inconsistent", verified: false, problems: [{ cause: error.message }] }, signatures: [], preventions: { enforced: [], proposed: [], rolled_back: [] }, claims: { counts: {}, items: [] } };
+      }
+    })(),
+    approvals: approvalSnapshot(root),
+    supervisor: supervisorSnapshot(),
+    leases: reconcileLeases(root),
+    backups: listBackups(root),
+    routine_runs: listRoutineRuns(root),
+    scheduler: schedulerStatus(root),
+  };
+}

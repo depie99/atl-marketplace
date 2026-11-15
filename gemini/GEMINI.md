@@ -1,0 +1,1 @@
+For ATL requests, read atl_skill(name="atl") and follow its workflow. For authorized project setup or dashboard requests, use atl_start with the absolute application path. The full ATL runtime is bundled. Host permissions and ATL trust gates apply. Do not start workers from installation alone.

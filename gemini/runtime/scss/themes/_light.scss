@@ -1,0 +1,78 @@
+// Light theme for the ATL Control Plane — mirror of themes/_dark.scss, same
+// key set. The app is an ops console, so light mode is a violet-tinted paper
+// ground with white panels, a deepened violet accent for ≥4.5:1 text contrast,
+// and a darkened mint success family.
+//
+// Every token MUST exist in both theme maps — _tokens.scss fails the build
+// otherwise. When adding a token, add it to _dark.scss in the same change.
+
+$theme: (
+  // surfaces
+  "bg": #f4f4f9,
+  "side": #f8f8fc,
+  "pane": #ffffff,
+  "raised": #f7f7fb,
+  "chip": #efeff6,
+  "btn-bg": #ffffff,
+  "btn-bg-hover": #f1f1f8,
+  "pill-bg": #f0eff7,
+  "field-bg": #ffffff,
+  "step-on-bg": #e2f2ec,
+  "term-bg": #f7f7fb,
+  "dialog-bg": #ffffff,
+  "dock-bg": #f0f0f7,
+  "avatar-bg": #ece9fb,
+  "notice-bg": #faf3e2,
+  "mobile-bg": #f0f0f7,
+  "row-hover": #f2f2f8,
+  "nav-on": #ece9fb,
+  "track": #dcdce8,
+  // text
+  "text": #1d1b2e,
+  "muted": #636085,
+  "faint": #6f6c92,
+  "nav-ink": #4e4b70,
+  "btn-ink": #23213a,
+  "label-ink": #5f5c82,
+  "step-ink": #3f6157,
+  "term-ink": #33314d,
+  "kbd-ink": #6f6c92,
+  "on-accent": #ffffff,
+  // lines
+  "border": #deddeb,
+  "row-line": #e9e9f2,
+  "btn-edge": #c9c7dd,
+  "btn-edge-hover": #a5a2c4,
+  "pill-edge": #c9c7dd,
+  "key-edge": #c9c7dd,
+  "field-edge": #c4c2d8,
+  "step-on-edge": #7cc4ae,
+  "term-edge": #d5d4e4,
+  "dialog-edge": #c0bed6,
+  "dock-edge": #d9d8e8,
+  "avatar-edge": #cfc7f2,
+  "notice-edge": #ddb666,
+  "plan-edge": #bab8cf,
+  // brand — five status hues, violet accent
+  "accent": #6a4fd6,
+  "red": #c23a4a,
+  "amber": #9a6709,
+  "blue": #3565c9,
+  "violet": #7a52e8,
+  // effects
+  "backdrop": #2a2840b8,
+  "dialog-shadow": #23213a66,
+  "accent-fade": #6a4fd600,
+  // accent family — primary fill, soft fills, focus, diagram canvas
+  "accent-strong": #5b3fc9,
+  "accent-strong-hover": #4e33bd,
+  "accent-bg": #ece9fb,
+  "accent-edge": #d5cef5,
+  "focus": #5b3fc9,
+  "surface": #ffffff,
+  // success family — deep mint for white-ground text contrast
+  "green": #0e8a6d,
+  "green-bg": #e0f2ec,
+  "green-edge": #8fcab6,
+  "green-fade": #0e8a6d00,
+);

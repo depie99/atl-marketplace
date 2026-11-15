@@ -1,0 +1,38 @@
+{
+  "name": "@depie99/atl-plugin",
+  "version": "0.6.10",
+  "description": "Full ATL: engineering skills, workflows, persistent tasks, bounded execution and the local Control Plane.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "atl-release.json",
+    ".zcode-plugin",
+    "runtime",
+    "skills",
+    "config",
+    "commands",
+    "verification",
+    "docs",
+    "plugins",
+    "plugin-ui",
+    "cordis.patch.yml",
+    "gemini-extension.json",
+    "GEMINI.md",
+    "start.cmd",
+    "start.sh",
+    "README.md",
+    "README.fa.md",
+    "GUIDE.md",
+    "USAGE.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "atl": "runtime/atl-manager.mjs",
+    "atl-connect": "runtime/atl-connect.mjs"
+  },
+  "dependencies": {},
+  "bundledDependencies": []
+}

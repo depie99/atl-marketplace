@@ -1,0 +1,44 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agent-trust-ladder",
+  "version": "0.6.10",
+  "description": "Full ATL: engineering skills, workflows, persistent tasks, bounded execution and the local Control Plane.",
+  "author": {
+    "name": "depie99",
+    "url": "https://github.com/depie99"
+  },
+  "homepage": "https://github.com/depie99/Agent-Trust-Ladder",
+  "repository": "https://github.com/depie99/Agent-Trust-Ladder",
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "trust",
+    "verification",
+    "specification"
+  ],
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "onboardingSkill": "./skills/atl-plugin/SKILL.md",
+      "interface": {
+        "displayName": "Agent Trust Ladder",
+        "shortDescription": "Tasks, execution, workflows and Control Plane",
+        "longDescription": "Full ATL: engineering skills, workflows, persistent tasks, bounded execution and the local Control Plane.",
+        "developerName": "depie99",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Interactive",
+          "Write"
+        ],
+        "websiteURL": "https://github.com/depie99/Agent-Trust-Ladder",
+        "defaultPrompt": [
+          "Initialize this application and open its ATL Control Plane.",
+          "Assess this project and choose the smallest trustworthy workflow.",
+          "Specify observable behavior and acceptance examples.",
+          "Inspect and fix this implemented UI against its real states and requirements.",
+          "Audit this change and give me a trust verdict."
+        ]
+      }
+    }
+  }
+}

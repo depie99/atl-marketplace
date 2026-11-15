@@ -1,0 +1,1403 @@
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { paths, loadState, saveState } from "./state.mjs";
+import { supervisorSnapshot } from "./supervisor.mjs";
+import { createTaskInWorkspace } from "./task-workspace.mjs";
+import { queueAdd, queueCreate, loadQueue, loadQueueBook, saveQueue, queueList, queueRemove } from "./queue.mjs";
+import { usageGate } from "./usage.mjs";
+import { validateContracts } from "./queue-recovery.mjs";
+import { isSkillAvailable } from "./skill-router.mjs";
+import { readResourceConfig, budgetDecision } from "./resource-policy.mjs";
+
+export const PLAN_STAGES = Object.freeze(["intent", "frame", "specify", "route", "repair", "plan", "review", "approved"]);
+export const PLAN_SCHEMA_VERSION = 1;
+export const PLAN_CONTRACT_VERSION = 2;
+
+// ---------- repository binding (spec 020) ----------
+// An imported request, plan draft, or plan task can name the registered
+// repository it belongs to. Unassigned objects keep the historical behavior:
+// planning inspects the ATL project that hosts the server. The supervisor
+// registry (~/.atl/supervisor.json) is the authority for the path; a binding
+// that cannot be resolved blocks planning/execution but never deletes data.
+function repositoryBindingError(message) {
+  const error = new Error(message);
+  error.statusCode = 409;
+  return error;
+}
+
+export function planGitRevision(repoRoot) {
+  if (!repoRoot) return null;
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).toString().trim() || null;
+  } catch { return null; }
+}
+
+function registeredRepository(repositoryId) {
+  const project = supervisorSnapshot().projects.find((entry) => entry.id === repositoryId);
+  if (!project) throw repositoryBindingError(`The repository assigned to this request (id ${repositoryId}) is no longer registered under Projects. Reassign the request or re-register the repository; the request itself is kept.`);
+  let canonical = null;
+  try { canonical = fs.realpathSync(project.root); } catch {
+    throw repositoryBindingError(`The assigned repository "${project.name}" is missing on disk (${project.root}). Planning and execution stay blocked until the path exists again; the request itself is kept.`);
+  }
+  if (!fs.existsSync(path.join(canonical, ".git"))) {
+    throw repositoryBindingError(`The assigned repository "${project.name}" (${canonical}) is not a git checkout, so plans cannot be grounded or executed there. Reassign the request or fix the checkout.`);
+  }
+  return { repository_id: project.id, repository_name: project.name, repository_root: canonical, repoRoot: canonical };
+}
+
+// An imported request can affect several repositories (frontend + backend).
+// repository_ids is the ordered association list; repository_id/name mirror
+// its first entry so single-repository readers keep working unchanged.
+export function requestRepositoryIds(task) {
+  if (Array.isArray(task?.repository_ids) && task.repository_ids.length) return [...new Set(task.repository_ids.map(String).filter(Boolean))];
+  return task?.repository_id ? [String(task.repository_id)] : [];
+}
+
+// Resolve the inspection root for a draft (or draft-like object). Resolution
+// order: the draft's frozen repository snapshot, then its repository_id (an
+// explicit per-plan choice), then the source request's single association.
+// A request linked to several repositories never falls back to the first one:
+// each repository gets its own explicitly targeted plan.
+export function resolvePlanRepository(root, loaded) {
+  const binding = loaded?.repository || null;
+  let repositoryId = binding?.id || loaded?.repository_id || null;
+  if (!binding?.id && loaded?.source_task_id) {
+    let task = null;
+    try { task = loadState(root).tasks[loaded.source_task_id] || null; } catch { /* state unreadable: treat as unassigned */ }
+    const linked = requestRepositoryIds(task);
+    if (repositoryId && task && !linked.includes(repositoryId)) throw repositoryBindingError("This request is not linked to the chosen repository. Link the repository to the request first (Issue sources or Projects), so its plan lands on the right codebase.");
+    if (!repositoryId && linked.length > 1) throw repositoryBindingError(`This request affects ${linked.length} repositories. Choose which repository to plan; each repository gets its own plan and queue.`);
+    repositoryId ||= linked[0] || null;
+  }
+  if (!repositoryId) return { repository_id: null, repository_name: null, repository_root: null, repository_revision: binding?.revision || null, repoRoot: null };
+  const resolved = registeredRepository(repositoryId);
+  return { ...resolved, repository_revision: binding?.id === repositoryId ? (binding.revision || null) : null };
+}
+
+export function repositoryStamp(root, loaded) {
+  const resolved = resolvePlanRepository(root, loaded);
+  if (!resolved.repository_id) return null;
+  return { id: resolved.repository_id, name: resolved.repository_name, root: resolved.repository_root, revision: planGitRevision(resolved.repoRoot), captured_at: new Date().toISOString() };
+}
+
+// The root directory listing is reviewer context, not reviewed evidence. It
+// changes whenever tooling creates a directory (config/, coverage/, a new
+// fixture), which would silently stale every approved plan and block the
+// overnight queue. Declared evidence files, AGENTS.md and the package/skill
+// manifests stay hashed so a real evidence change still invalidates a review.
+function fingerprintEvidence(evidence) {
+  if (Array.isArray(evidence)) return evidence.map(fingerprintEvidence);
+  if (!evidence || typeof evidence !== "object") return evidence;
+  const { root_entries: _rootEntries, ...stable } = evidence;
+  if (stable.project) stable.project = fingerprintEvidence(stable.project);
+  return stable;
+}
+
+// Shared by the review writer and every reader that re-checks freshness, so a
+// review can never be "stale" only because two modules hashed it differently.
+export function planFingerprint(artifact, intent, evidence) {
+  return crypto.createHash("sha256").update(JSON.stringify({ artifact, intent, evidence: fingerprintEvidence(evidence) })).digest("hex");
+}
+
+// Cross-process review gate: held for the whole provider call (not just the
+// commit), so two runtimes can never run reviews on one draft at once.
+// Stale locks from dead runtimes are recovered with the same pid probe as
+// withDraftLock. Returns nothing; throws 409-class errors on conflict.
+function acquireReviewLock(dir) {
+  const lock = path.join(dir, "review.lock");
+  let fd;
+  try { fd = fs.openSync(lock, "wx"); } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    let owner;
+    try { owner = JSON.parse(fs.readFileSync(lock, "utf8")); } catch { /* a lock still being initialized is active */ }
+    if (Number.isInteger(owner?.pid)) {
+      let alive = true;
+      try { process.kill(owner.pid, 0); } catch (probe) { if (probe.code === "ESRCH") alive = false; }
+      if (!alive) {
+        let current;
+        try { current = JSON.parse(fs.readFileSync(lock, "utf8")); } catch (recoveryError) {
+          if (recoveryError.code !== "ENOENT") throw recoveryError;
+          return acquireReviewLock(dir);
+        }
+        if (current.pid === owner.pid && current.created_at === owner.created_at) fs.rmSync(lock, { force: true });
+        return acquireReviewLock(dir);
+      }
+    }
+    const conflict = new Error(`a review is already running for this plan draft (started by pid ${owner?.pid ?? "unknown"})`);
+    conflict.statusCode = 409;
+    throw conflict;
+  }
+  try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() })); } finally { fs.closeSync(fd); }
+}
+function releaseReviewLock(dir) {
+  fs.rmSync(path.join(dir, "review.lock"), { force: true });
+}
+function withDraftLock(dir, operation) {
+  const lock = path.join(dir, "artifact.lock");
+  let fd;
+  try {
+    fd = fs.openSync(lock, "wx");
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      let owner;
+      try { owner = JSON.parse(fs.readFileSync(lock, "utf8")); } catch { /* a lock still being initialized is active */ }
+      if (Number.isInteger(owner?.pid)) {
+        let alive = true;
+        try { process.kill(owner.pid, 0); } catch (probe) { if (probe.code === "ESRCH") alive = false; }
+        if (!alive) {
+          let current;
+          try {
+            current = JSON.parse(fs.readFileSync(lock, "utf8"));
+          } catch (recoveryError) {
+            if (recoveryError.code !== "ENOENT") throw recoveryError;
+            return withDraftLock(dir, operation);
+          }
+          if (current.pid === owner.pid && current.created_at === owner.created_at) fs.rmSync(lock, { force: true });
+          return withDraftLock(dir, operation);
+        }
+      }
+      const conflict = new Error("plan draft changed or is being updated; reload it and retry");
+      conflict.statusCode = 409;
+      throw conflict;
+    }
+    throw error;
+  }
+  try {
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() }));
+    return operation();
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(lock, { force: true });
+  }
+}
+
+function writeArtifactEnvelope(file, envelope) {
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(envelope, null, 2) + "\n", { flag: "wx" });
+    fs.renameSync(temporary, file);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+export function reviewPlanArtifact(root, draft, review, { expectedRevision = null, evidenceSnapshot = null, repoRoot = null } = {}) {
+  const loaded = typeof draft === "string" ? loadPlanDraft(root, draft) : draft;
+  if (loaded.stage === "repair") throw new Error("Repair and validate this saved response before requesting accuracy review");
+  const normalized = normalizePlanContract(loaded.artifact, loaded.intent);
+  delete normalized.review;
+  const findings = Array.isArray(review?.findings) ? review.findings : [];
+  if (!findings.every((item) => item && ["blocker", "major", "minor", "info"].includes(item.severity) && String(item.message || "").trim())) throw new Error("review findings must include a severity and message");
+  const unresolved = normalized.open_questions.filter((item) => !item.resolved);
+  const passed = review?.verdict === "passed" && !unresolved.length && !findings.some((item) => ["blocker", "major"].includes(item.severity));
+  const sourceRevision = review.source_revision || null;
+  const reviewedEvidence = evidenceSnapshot || planningEvidence(root, normalized, { repoRoot });
+  const result = { schema: PLAN_CONTRACT_VERSION, kind: review.kind === "egm" ? "egm" : "atl", verdict: passed ? "passed" : "blocked", findings, reviewed_at: new Date().toISOString(), fingerprint: planFingerprint(normalized, loaded.intent, { project: reviewedEvidence, source_revision: sourceRevision }), provider: review.provider || null, model: review.model || null, source_revision: sourceRevision, egm: review.egm || null };
+  const file = path.join(loaded.dir, "artifact.json");
+  return withDraftLock(loaded.dir, () => {
+    const envelope = JSON.parse(fs.readFileSync(file, "utf8"));
+    const currentRevision = Number(envelope.revision) || 1;
+    if (expectedRevision != null && currentRevision !== expectedRevision) {
+      const stale = new Error("plan review is stale because the draft changed while the provider was reviewing it");
+      stale.statusCode = 409;
+      throw stale;
+    }
+    const currentArtifact = normalizePlanContract(envelope.artifact, loaded.intent);
+    delete currentArtifact.review;
+    const currentEvidence = planningEvidence(root, currentArtifact, { repoRoot });
+    if (planFingerprint(currentArtifact, loaded.intent, currentEvidence) !== planFingerprint(normalized, loaded.intent, reviewedEvidence)) {
+      const stale = new Error("plan review is stale because the plan or its evidence changed while the provider was reviewing it");
+      stale.statusCode = 409;
+      throw stale;
+    }
+    envelope.revision = currentRevision + 1;
+    envelope.artifact = normalized;
+    envelope.review = result;
+    envelope.artifact.review = result;
+    envelope.saved_at = new Date().toISOString();
+    writeArtifactEnvelope(file, envelope);
+    return { ...loaded, revision: envelope.revision, artifact: envelope.artifact, review: result, saved_at: envelope.saved_at };
+  });
+}
+
+export { acquireReviewLock, releaseReviewLock };
+
+export function planReviewSnapshotCurrent(root, draft) {
+  try {
+    const loaded = typeof draft === "string" ? loadPlanDraft(root, draft) : draft;
+    const review = loaded.review || loaded.artifact?.review;
+    if (!loaded.artifact || review?.verdict !== "passed") return false;
+    const normalized = normalizePlanContract(loaded.artifact, loaded.intent);
+    delete normalized.review;
+    const repoRoot = resolvePlanRepository(root, loaded).repoRoot;
+    const fingerprint = planFingerprint(normalized, loaded.intent, { project: planningEvidence(root, normalized, { repoRoot }), source_revision: review.source_revision || null });
+    return fingerprint === review.fingerprint;
+  } catch {
+    return false;
+  }
+}
+
+export function normalizePlanContract(artifact, intent = "") {
+  const result = { ...artifact, plan_contract_version: artifact?.plan_contract_version || 1 };
+  result.requirements = Array.isArray(result.requirements) ? result.requirements : result.plan_contract_version === PLAN_CONTRACT_VERSION ? [] : [{ id: "r1", text: String(result.objective || intent).trim(), source: "original request" }];
+  result.constraints = Array.isArray(result.constraints) ? result.constraints : [];
+  result.observed_evidence = Array.isArray(result.observed_evidence) ? result.observed_evidence : [];
+  result.assumptions = Array.isArray(result.assumptions) ? result.assumptions : [];
+  result.clarifications = Array.isArray(result.clarifications) ? result.clarifications : [];
+  result.open_questions = (Array.isArray(result.open_questions) ? result.open_questions : []).map((question, index) => {
+    const item = typeof question === "string" ? { question } : { ...question };
+    const id = String(item.id || `q${index + 1}`);
+    const answered = result.clarifications.some((entry) => entry.question_id === id && String(entry.answer || "").trim());
+    const suggested_answers = Array.isArray(item.suggested_answers)
+      ? item.suggested_answers.filter((answer) => typeof answer === "string" && answer.trim()).map((answer) => answer.trim()).slice(0, 4)
+      : [];
+    return { ...item, suggested_answers, id, resolved: answered, ...(answered ? {} : { answer: "" }) };
+  });
+  result.task_proposals = (Array.isArray(result.task_proposals) ? result.task_proposals : []).map((proposal) => ({
+    ...proposal,
+    requirement_ids: Array.isArray(proposal.requirement_ids) ? proposal.requirement_ids : result.plan_contract_version === PLAN_CONTRACT_VERSION ? [] : result.requirements.map((item) => item.id),
+    instructions: String(proposal.instructions || (result.plan_contract_version === PLAN_CONTRACT_VERSION ? "" : proposal.objective) || ""),
+    deliverables: Array.isArray(proposal.deliverables) ? proposal.deliverables : [],
+    skill_reasons: proposal.skill_reasons || {},
+  }));
+  return result;
+}
+
+export function planningEvidence(root, artifact = null, { repoRoot = null } = {}) {
+  const base = repoRoot ? path.resolve(repoRoot) : root;
+  const read = (file, limit = 6000) => {
+    try { return fs.readFileSync(path.join(base, file), "utf8").slice(0, limit); } catch { return null; }
+  };
+  let packageInfo = null;
+  try { packageInfo = JSON.parse(read("package.json", 100_000) || "null"); } catch { /* malformed manifest is shown as unavailable */ }
+  let skills = [];
+  try {
+    skills = fs.readdirSync(path.join(base, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => {
+      const manifest = read(path.join("skills", entry.name, "SKILL.md"), 3000) || "";
+      return { id: entry.name, description: /^description:\s*(.+)$/mi.exec(manifest)?.[1]?.trim() || "Description unavailable" };
+    });
+  } catch { /* no project skill directory */ }
+  let entries = [];
+  try { entries = fs.readdirSync(base, { withFileTypes: true }).filter((entry) => !entry.name.startsWith(".") && entry.name !== "%T%" && !["node_modules", "vendor", "dist", "build"].includes(entry.name)).map((entry) => `${entry.isDirectory() ? "dir" : "file"}: ${entry.name}`).slice(0, 80); } catch { /* root may be unavailable */ }
+  const evidencePaths = [...new Set([
+    ...(artifact?.observed_evidence || []).map((item) => typeof item === "string" ? item : item.path),
+    ...(artifact?.task_proposals || []).flatMap((proposal) => proposal.files || []),
+  ].filter(Boolean))].slice(0, 100);
+  const fileEvidence = evidencePaths.map((relative) => {
+    const full = path.resolve(base, relative);
+    const rootPrefix = path.resolve(base) + path.sep;
+    if (!full.startsWith(rootPrefix)) return { path: relative, status: "outside-project" };
+    try {
+      const stat = fs.statSync(full);
+      if (stat.isFile()) return { path: relative, sha256: crypto.createHash("sha256").update(fs.readFileSync(full)).digest("hex") };
+      if (stat.isDirectory()) {
+        const files = [];
+        const visit = (directory) => {
+          if (files.length >= 200) return;
+          for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            if (files.length >= 200 || [".git", "node_modules", "vendor", "dist", "build"].includes(entry.name)) continue;
+            const child = path.join(directory, entry.name);
+            if (entry.isDirectory()) visit(child);
+            else if (entry.isFile()) files.push({ path: path.relative(base, child).replaceAll(path.sep, "/"), sha256: crypto.createHash("sha256").update(fs.readFileSync(child)).digest("hex") });
+          }
+        };
+        visit(full);
+        return { path: relative, status: "directory", files, truncated: files.length >= 200 };
+      }
+      return { path: relative, status: "not-file" };
+    } catch { return { path: relative, status: "missing" }; }
+  });
+  return {
+    root_entries: entries,
+    package: packageInfo ? { name: packageInfo.name || null, scripts: packageInfo.scripts || {} } : null,
+    repository_instructions: read("AGENTS.md", 6000),
+    readme_excerpt: read("README.md", 6000),
+    available_project_skills: skills,
+    referenced_file_fingerprints: fileEvidence,
+  };
+}
+
+export function validatePlanGrounding(root, artifact, { repoRoot = null } = {}) {
+  const base = path.resolve(repoRoot || root);
+  const plannedFiles = new Set((artifact.task_proposals || []).flatMap((proposal) => proposal.files || []).map((file) => path.relative(base, path.resolve(base, file)).replaceAll(path.sep, "/")));
+  const evidenceByPath = new Map(planningEvidence(repoRoot || root, artifact).referenced_file_fingerprints.map((item) => [item.path, item]));
+  for (const item of artifact.observed_evidence || []) {
+    const evidencePath = typeof item === "string" ? null : item.path;
+    if (!evidencePath) throw new Error("observed evidence must identify a project path or a source URL and revision");
+    if (/^https:\/\//i.test(evidencePath)) {
+      if (!item.revision && !item.source_revision) throw new Error(`external observed evidence needs a captured revision: ${evidencePath}`);
+      continue;
+    }
+    const resolved = path.resolve(base, evidencePath);
+    if (!resolved.startsWith(base + path.sep)) throw new Error(`observed evidence path is outside the project: ${evidencePath}`);
+    const captured = evidenceByPath.get(evidencePath);
+    if (!captured || ["missing", "outside-project", "not-file"].includes(captured.status)) throw new Error(`observed evidence path was not found in the project: ${evidencePath}`);
+  }
+  for (const proposal of artifact.task_proposals || []) for (const file of proposal.files || []) {
+    const resolved = path.resolve(base, file);
+    if (!resolved.startsWith(base + path.sep)) throw new Error(`task ${proposal.id} has a path outside the project: ${file}`);
+  }
+  const commands = [...(artifact.verifier_commands || []), ...(artifact.task_proposals || []).map((proposal) => proposal.verify)];
+  if (commands.some((command) => /not determined|identify actual|placeholder|\bunknown\b/i.test(command))) throw new Error("verification commands cannot be placeholders or unknown");
+  const manifest = planningEvidence(repoRoot || root).package;
+  for (const command of commands) {
+    const npmScript = /^(?:npm|pnpm|yarn)\s+run\s+([\w:-]+)/i.exec(String(command));
+    if (npmScript && !manifest?.scripts?.[npmScript[1]]) throw new Error(`verification command references an unknown package script: ${npmScript[1]}`);
+    const executableFile = /^(?:node|python(?:3)?)\s+([^\s]+)/i.exec(String(command));
+    if (executableFile && !executableFile[1].startsWith("-")) {
+      const target = path.resolve(base, executableFile[1]);
+      const relative = path.relative(base, target).replaceAll(path.sep, "/");
+      if (!target.startsWith(base + path.sep) || (!fs.existsSync(target) && !plannedFiles.has(relative))) throw new Error(`verification command references a file not found in the project or task plan: ${executableFile[1]}`);
+    }
+  }
+  return true;
+}
+
+export function answerPlanQuestion(root, draft, questionId, answer) {
+  const loaded = typeof draft === "string" ? loadPlanDraft(root, draft) : draft;
+  const text = String(answer || "").trim();
+  if (!text) throw new Error("a clarification answer is required");
+  const artifact = cloneArtifact(loaded);
+  const index = (artifact.open_questions || []).findIndex((item, i) => String(item.id || `q${i + 1}`) === String(questionId));
+  if (index < 0) throw new Error(`open question ${questionId} not found`);
+  const prior = artifact.open_questions[index];
+  artifact.clarifications = [...(artifact.clarifications || []), { question_id: questionId, question: prior.question || prior.text || String(prior), answer: text, answered_at: new Date().toISOString() }];
+  artifact.open_questions[index] = typeof prior === "string" ? { id: questionId, question: prior, resolved: true, answer: text } : { ...prior, id: questionId, resolved: true, answer: text };
+  return persistArtifact(root, loaded, artifact);
+}
+
+function slug(value) {
+  return String(value || "intent").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "intent";
+}
+
+function titleOf(intent) {
+  const first = String(intent || "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "Untitled ATL task";
+  return first.replace(/^#+\s*/, "").slice(0, 120);
+}
+
+export function frameIntent(intent, { constraints = [], risks = [], skills = [] } = {}) {
+  const text = String(intent || "").trim();
+  if (!text) throw new Error("Plan Studio needs an intent");
+  return {
+    schema: PLAN_SCHEMA_VERSION,
+    stage: "frame",
+    title: titleOf(text),
+    objective: text,
+    constraints: [...constraints],
+    risks: [...risks],
+    completion_checks: ["The requested behavior is observable in a real verification command."],
+    acceptance_examples: [{ given: "the bounded task is implemented", when: "the verifier runs", then: "the requested outcome is observed" }],
+    selected_skills: [...skills],
+    proposed_worker: "pip",
+    skill_route: skills.map((skill) => ({ skill, reason: "selected by the manager or ATL route" })),
+    implementation_steps: [],
+    verifier_commands: [],
+    generated_by: "atl-deterministic-frame",
+  };
+}
+
+// Local generation is deliberately a skeleton, never an approvable plan: it
+// reads no repository, so it can never satisfy the grounded-evidence rules of
+// the plan contract. It drafts structure only, persists at frame stage, and
+// the studio funnels the manager to a model plan before review or approval.
+export function generateLocalPlan(intent) {
+  const frame = frameIntent(intent, { skills: ["atl-frame", "atl-specify", "atl-plan", "atl-implement", "atl-verify"] });
+  return {
+    ...frame,
+    stage: "plan-skeleton",
+    constraints: ["Preserve existing project behavior outside the approved scope", "Keep execution behind an explicit owner confirmation"],
+    risks: ["State, UI, and runtime behavior may drift unless verified together"],
+    implementation_steps: [],
+    verifier_commands: [],
+    planning_limitations: ["This is a structural skeleton. No repository files, project commands, or request-specific acceptance criteria were inspected or verified. It is not reviewable or approvable — complete it with a model plan first."],
+    plan_skeleton: true,
+    generated_by: "atl-local-skeleton",
+    generated_via: "local",
+  };
+}
+export function listPlanDrafts(root) {
+  const base = path.join(path.dirname(paths(root).state), "plan-studio");
+  if (!fs.existsSync(base)) return [];
+  return fs.readdirSync(base, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => {
+    try { return loadPlanDraft(root, entry.name); } catch { return null; }
+  }).filter(Boolean).sort((a, b) => String(b.saved_at || "").localeCompare(String(a.saved_at || "")));
+}
+
+// Relationship index for the Projects work map and imported-request rows:
+// which request each saved draft plans, which repository it targets, and
+// whether approval already created its queue. Reads only artifact.json
+// envelopes (husk directories without one are skipped). A legacy draft with
+// no frozen binding inherits its request's single association, flagged as
+// inferred.
+export function planDraftIndex(root) {
+  const base = path.join(path.dirname(paths(root).state), "plan-studio");
+  let entries = [];
+  try { entries = fs.readdirSync(base, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return []; }
+  let tasks = {};
+  try { tasks = loadState(root).tasks || {}; } catch { /* unreadable state: no approval or inference data */ }
+  const queueByDraft = new Map();
+  for (const task of Object.values(tasks)) if (task.plan_draft_id && !queueByDraft.has(task.plan_draft_id)) queueByDraft.set(task.plan_draft_id, task.plan_queue_id || null);
+  const index = [];
+  for (const entry of entries) {
+    let saved;
+    try { saved = JSON.parse(fs.readFileSync(path.join(base, entry.name, "artifact.json"), "utf8")); } catch { continue; }
+    let repository = saved.repository?.id ? { id: String(saved.repository.id), name: saved.repository.name || null, inferred: false } : null;
+    if (!repository && saved.source_task_id) {
+      const linked = requestRepositoryIds(tasks[saved.source_task_id]);
+      if (linked.length === 1) repository = { id: linked[0], name: tasks[saved.source_task_id].repository_name || null, inferred: true };
+    }
+    index.push({
+      id: entry.name,
+      title: saved.artifact?.title || null,
+      stage: saved.stage || null,
+      saved_at: saved.saved_at || null,
+      source_task_id: saved.source_task_id || null,
+      repository,
+      review: saved.review?.verdict || saved.artifact?.review?.verdict || null,
+      approved: queueByDraft.has(entry.name),
+      queue_id: queueByDraft.get(entry.name) || null,
+    });
+  }
+  return index.sort((a, b) => String(b.saved_at || "").localeCompare(String(a.saved_at || "")));
+}
+
+// Model answers drift around the agreed schema in well-known ways. The
+// recognizable variants (acceptance_criteria, scenario/context + action +
+// expected/outcome, "Given X when Y then Z" prose, implementation_steps as
+// plain strings or description/files-alias objects) are mapped onto the
+// canonical shapes BEFORE validation. A shape that is still unrecognizable
+// passes through untouched and the validator refuses it — the fidelity gate
+// keeps its teeth.
+export function normalizeModelArtifact(artifact) {
+  if (!artifact || typeof artifact !== "object") return artifact;
+  const result = { ...artifact };
+  // Preserve model-authored meaning while accepting common structured forms.
+  // Unknown/ambiguous values stay untouched so validation can reject them.
+  const checks = (value) => {
+    const list = typeof value === "string" ? [value] : value;
+    return Array.isArray(list) ? list.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const values = [item.statement, item.text, item.check, item.description]
+        .filter((entry) => typeof entry === "string" && entry.trim());
+      return values.length === 1 ? values[0].trim() : item;
+    }) : value;
+  };
+  if (result.completion_checks != null) result.completion_checks = checks(result.completion_checks);
+  if (Array.isArray(result.verifier_commands)) result.verifier_commands = result.verifier_commands.map((item) =>
+    item && typeof item === "object" && typeof item.command === "string" && item.command.trim() ? item.command.trim() : item);
+  if (Array.isArray(result.task_proposals)) result.task_proposals = result.task_proposals.map((proposal) => {
+    if (!proposal || typeof proposal !== "object") return proposal;
+    const next = { ...proposal };
+    if (next.completion_checks != null) next.completion_checks = checks(next.completion_checks);
+    if (next.instructions == null && next.concrete_instructions != null) {
+      const instructions = next.concrete_instructions;
+      if (typeof instructions === "string") next.instructions = instructions;
+      else if (Array.isArray(instructions) && instructions.every((item) => typeof item === "string" && item.trim())) next.instructions = instructions.join("\n");
+    }
+    if (next.files == null && Array.isArray(next.affected_files)) next.files = next.affected_files;
+    if (Array.isArray(next.verify) && next.verify.every((item) => typeof item === "string" && item.trim())) next.verify = next.verify.join("; ");
+    if (Array.isArray(next.skill_reasons) && next.skill_reasons.every((item) => item && typeof item.skill === "string" && typeof item.reason === "string" && item.reason.trim()) && new Set(next.skill_reasons.map((item) => item.skill)).size === next.skill_reasons.length) {
+      next.skill_reasons = Object.fromEntries(next.skill_reasons.map((item) => [item.skill, item.reason]));
+    }
+    return next;
+  });
+  const pick = (object, keys) => {
+    for (const key of keys) {
+      const value = object?.[key];
+      if (value != null && String(value).trim()) return String(value).trim();
+    }
+    return null;
+  };
+  const acceptanceSource = result.acceptance_examples ?? result.acceptance_criteria ?? result.acceptance ?? null;
+  if (acceptanceSource != null) {
+    const list = Array.isArray(acceptanceSource) ? acceptanceSource : [acceptanceSource];
+    result.acceptance_examples = list.map((item) => {
+      if (item == null) return item;
+      if (typeof item === "string") {
+        const prose = /given\s*[:\-]?\s*(.+?)\s*[,\s;]*when\s*[:\-]?\s*(.+?)\s*[,\s;]*then\s*[:\-]?\s*(.+)/i.exec(item);
+        if (prose) return { given: prose[1].trim(), when: prose[2].trim(), then: prose[3].trim() };
+        return item;
+      }
+      if (typeof item !== "object") return item;
+      const given = pick(item, ["given", "given_when", "scenario", "context", "arrange"]);
+      const when = pick(item, ["when", "action", "event", "condition"]);
+      const then = pick(item, ["then", "expected", "outcome", "result", "assertion"]);
+      if (given && when && then) return { given, when, then };
+      return item;
+    });
+  }
+  // Requirements drift the same way: statement/description/summary instead of
+  // text, and R1-style ids where the contract wants r1. Ids are lowercased
+  // once and remapped through task_proposals.requirement_ids so links stay
+  // intact; an id that is still not r<digits> is left for the gate to refuse.
+  if (Array.isArray(result.requirements)) {
+    const idMap = new Map();
+    result.requirements = result.requirements.map((item, index) => {
+      if (item == null) return item;
+      if (typeof item === "string") return { id: `r${index + 1}`, text: item };
+      if (typeof item !== "object") return item;
+      const text = pick(item, ["text", "statement", "description", "summary", "requirement", "title"]);
+      const rawId = String(item.id || `r${index + 1}`);
+      const numeric = /^(?:r(?:eq|equirement)?)?[-_. ]?(\d+)$/i.exec(rawId);
+      const id = numeric ? `r${numeric[1]}` : rawId;
+      if (id !== rawId) idMap.set(rawId, id);
+      return { ...item, id, ...(text ? { text } : {}) };
+    });
+    if (idMap.size && Array.isArray(result.task_proposals)) result.task_proposals = result.task_proposals.map((proposal) => ({ ...proposal, requirement_ids: (proposal.requirement_ids || []).map((rid) => idMap.get(rid) || rid) }));
+  }
+  const stepsSource = result.implementation_steps ?? result.steps ?? null;
+  if (stepsSource != null) {
+    const list = Array.isArray(stepsSource) ? stepsSource : [stepsSource];
+    result.implementation_steps = list.map((item) => {
+      if (item == null) return item;
+      if (typeof item === "string") {
+        const step = item.trim();
+        return step ? { step, files: [], verify: "" } : item;
+      }
+      if (typeof item !== "object") return item;
+      const step = pick(item, ["step", "description", "action", "task", "detail", "title"]);
+      if (!step) return item;
+      const rawFiles = item.files ?? item.paths ?? item.touches ?? item.edits ?? [];
+      const files = (Array.isArray(rawFiles) ? rawFiles : String(rawFiles).split(/[,;\n]/)).map((entry) => String(entry).trim()).filter(Boolean);
+      const rawVerify = item.verify ?? item.verification ?? item.checks ?? item.check ?? item.evidence ?? "";
+      const verify = Array.isArray(rawVerify) ? rawVerify.map((entry) => String(entry).trim()).filter(Boolean).join("; ") : String(rawVerify).trim();
+      return { step, files, verify };
+    });
+  }
+  // The plan schema keeps a top-level verifier index, but providers often put
+  // the exact same project checks on each implementation card. Reuse those
+  // checks when the index is omitted; never invent a command or turn a vague
+  // acceptance statement into an executable verifier.
+  if (!Array.isArray(result.verifier_commands) || !result.verifier_commands.length) {
+    // Providers also emit verify as a list of checks per card; flatten those.
+    const asList = (value) => Array.isArray(value) ? value : [value];
+    const cardChecks = Array.isArray(result.task_proposals) ? result.task_proposals.flatMap((proposal) => asList(proposal?.verify)) : [];
+    const stepChecks = Array.isArray(result.implementation_steps) ? result.implementation_steps.flatMap((step) => asList(step?.verify)) : [];
+    const derived = [...cardChecks, ...stepChecks]
+      .filter((value) => typeof value === "string" && value.trim())
+      .map((value) => value.trim());
+    if (derived.length) result.verifier_commands = [...new Set(derived)];
+  }
+  return result;
+}
+
+// Unlinked model observations are claims, not repository evidence. Preserve
+// them explicitly as unverified assumptions and require clarification rather
+// than inventing a file citation or losing the entire planning response.
+export function normalizeModelEvidence(artifact) {
+  if (!artifact || !Array.isArray(artifact.observed_evidence)) return artifact;
+  // Providers commonly label the observation body as `text`.  It is still an
+  // unlinked claim when it has no repository path or revision-bound URL; move
+  // it through the same honest recovery route as description/fact/statement.
+  const unlinked = artifact.observed_evidence.filter((item) => typeof item === "string" && item.trim() || item && typeof item === "object" && !item.path && [item.description, item.fact, item.statement, item.text].some((value) => typeof value === "string" && value.trim()));
+  if (!unlinked.length) return artifact;
+  const claims = unlinked.map((item) => typeof item === "string" ? item : JSON.stringify(item));
+  const questions = Array.isArray(artifact.open_questions) ? artifact.open_questions : [];
+  const ids = new Set(questions.map((item) => item?.id));
+  let id = "evidence-grounding";
+  while (ids.has(id)) id += "-next";
+  return {
+    ...artifact,
+    observed_evidence: artifact.observed_evidence.filter((item) => !unlinked.includes(item)),
+    assumptions: [...(Array.isArray(artifact.assumptions) ? artifact.assumptions : []), ...claims.map((claim) => `Unverified model evidence claim (no file or revision citation): ${claim}`)],
+    open_questions: [...questions, { id, question: "Supply project paths or source URLs with captured revisions for the unverified model evidence claims listed under assumptions, or explicitly correct those claims.", blocks_approval: true }],
+  };
+}
+
+export function validatePlanArtifact(artifact) {
+  const required = ["title", "objective", "completion_checks", "acceptance_examples", "implementation_steps", "verifier_commands"];
+  const missing = required.filter((key) => !artifact || artifact[key] == null || (Array.isArray(artifact[key]) && artifact[key].length === 0));
+  if (missing.length) throw new Error(`Plan artifact missing: ${missing.join(", ")}`);
+  if (![artifact.title, artifact.objective].every((value) => typeof value === "string" && value.trim())) throw new Error("title and objective must be non-empty strings");
+  if (!Array.isArray(artifact.completion_checks) || !artifact.completion_checks.every((item) => typeof item === "string" && item.trim())) throw new Error("completion_checks must be non-empty strings");
+  if (!Array.isArray(artifact.acceptance_examples) || !artifact.acceptance_examples.every((item) => item && [item.given, item.when, item.then].every((value) => typeof value === "string" && value.trim()))) throw new Error("acceptance_examples must contain given/when/then");
+  // The gate demands a non-empty step description; files/verify are typed but
+  // optional because the normalizer fills them ([]/"") for string-shaped
+  // model steps — cards stay editable and the manager adds checks in review.
+  if (!Array.isArray(artifact.implementation_steps) || !artifact.implementation_steps.every((item) => item && typeof item === "object" && typeof item.step === "string" && item.step.trim())) throw new Error("implementation_steps must contain non-empty step descriptions");
+  if (!Array.isArray(artifact.verifier_commands) || !artifact.verifier_commands.length || !artifact.verifier_commands.every((command) => typeof command === "string" && command.trim())) throw new Error("verifier_commands must be non-empty strings");
+  validateProposals(artifact);
+  if (artifact.plan_contract_version === PLAN_CONTRACT_VERSION) {
+    if (!Array.isArray(artifact.requirements) || !artifact.requirements.length || !artifact.requirements.every((item) => item && /^r\d+$/.test(item.id || "") && String(item.text || "").trim())) throw new Error("requirements must contain identified, non-empty requirement statements");
+    if (!["observed_evidence", "assumptions", "open_questions"].every((key) => Array.isArray(artifact[key]))) throw new Error("plan contract requires evidence, assumptions, and open_questions lists");
+    const reqIds = new Set(artifact.requirements.map((item) => item.id));
+    if (!Array.isArray(artifact.task_proposals) || !artifact.task_proposals.length) throw new Error("version 2 plans must provide explicit task_proposals");
+    for (const proposal of artifact.task_proposals) {
+      if (!proposal.requirement_ids?.length || proposal.requirement_ids.some((id) => !reqIds.has(id))) throw new Error(`task ${proposal.id} must link to known requirements`);
+      if (String(proposal.instructions || "").trim().length < 30 || !proposal.deliverables?.length || proposal.deliverables.some((item) => !String(item).trim())) throw new Error(`task ${proposal.id} needs concrete implementation instructions and deliverables`);
+      if (!(proposal.selected_skills || []).length || (proposal.selected_skills || []).some((skill) => !String(proposal.skill_reasons?.[skill] || "").trim())) throw new Error(`task ${proposal.id} needs a skill and a reason for each assignment`);
+      if ((proposal.files || []).some((file) => /responsible|affected|project specification/i.test(file))) throw new Error(`task ${proposal.id} contains an ungrounded placeholder path`);
+      if (/not determined|identify actual project/i.test(proposal.verify || "")) throw new Error(`task ${proposal.id} has no project-grounded verifier`);
+    }
+    const covered = new Set(artifact.task_proposals.flatMap((proposal) => proposal.requirement_ids));
+    const uncovered = artifact.requirements.filter((item) => !covered.has(item.id));
+    if (uncovered.length) throw new Error(`requirements lack task coverage: ${uncovered.map((item) => item.id).join(", ")}`);
+    const checks = artifact.task_proposals.flatMap((proposal) => proposal.completion_checks);
+    const normalizeCheck = (check) => ({ negative: /\b(not|never|cannot|must not|should not)\b/i.test(check), words: String(check).toLowerCase().replace(/\b(not|never|cannot|must|should)\b/g, "").replace(/[^a-z0-9]+/g, " ").trim() });
+    for (let i = 0; i < checks.length; i++) for (let j = i + 1; j < checks.length; j++) {
+      const left = normalizeCheck(checks[i]), right = normalizeCheck(checks[j]);
+      if (left.words && left.words === right.words && left.negative !== right.negative) throw new Error(`contradictory completion checks: ${checks[i]} / ${checks[j]}`);
+    }
+  }
+  return true;
+}
+
+// Typed task proposals: one approvable card per canonical task. Drafts that
+// predate the schema (or model output that only returned implementation
+// steps) derive their cards 1:1 from implementation_steps, so approval always
+// has an ordered, editable card list to work from.
+export function normalizeProposals(artifact) {
+  const explicit = Array.isArray(artifact?.task_proposals) && artifact.task_proposals.length ? artifact.task_proposals : null;
+  const raw = explicit || (Array.isArray(artifact?.implementation_steps) ? artifact.implementation_steps : []).map((step, index) => ({
+    id: `p${index + 1}`,
+    title: step.step,
+    objective: `${step.step}\n\nOverall request:\n${artifact.objective || "Not recorded"}`,
+    // Steps without a model-supplied verify fall back to the step text as
+    // their completion definition — the proposal gate requires one check,
+    // and the manager edits it during card review.
+    completion_checks: [step.verify || step.step].filter(Boolean),
+    proposed_worker: artifact?.proposed_worker || "pip",
+    selected_skills: artifact?.selected_skills || [],
+    depends_on: index > 0 ? [`p${index}`] : [],
+    files: Array.isArray(step.files) ? step.files : [],
+    verify: step.verify || "",
+  }));
+  return raw.map((proposal, index) => ({
+    id: String(proposal.id || `p${index + 1}`),
+    title: String(proposal.title || proposal.step || `Task ${index + 1}`).trim().slice(0, 240),
+    objective: String(proposal.objective || proposal.title || proposal.step || "").trim(),
+    completion_checks: (Array.isArray(proposal.completion_checks) ? proposal.completion_checks : [proposal.verify].filter(Boolean)).map((item) => String(item).trim()).filter(Boolean),
+    proposed_worker: String(proposal.proposed_worker || artifact?.proposed_worker || "pip").trim() || "pip",
+    selected_skills: (Array.isArray(proposal.selected_skills) ? proposal.selected_skills : []).map((item) => String(item).trim()).filter(Boolean),
+    requirement_ids: Array.isArray(proposal.requirement_ids) ? proposal.requirement_ids.map(String) : [],
+    instructions: String(proposal.instructions || "").trim(),
+    deliverables: Array.isArray(proposal.deliverables) ? proposal.deliverables.map(String) : [],
+    skill_reasons: proposal.skill_reasons && typeof proposal.skill_reasons === "object" ? proposal.skill_reasons : {},
+    depends_on: (Array.isArray(proposal.depends_on) ? proposal.depends_on : []).map((item) => String(item).trim()).filter(Boolean),
+    check_owners: proposal.check_owners || {},
+    dispatch_contract: proposal.dispatch_contract || {},
+    resource_estimate: proposal.resource_estimate && ['simple','standard','complex','critical'].includes(proposal.resource_estimate.complexity) ? {complexity:proposal.resource_estimate.complexity,reason:String(proposal.resource_estimate.reason||'').slice(0,500)} : null,
+    files: (Array.isArray(proposal.files) ? proposal.files : []).map((item) => String(item).trim()).filter(Boolean),
+    verify: String(proposal.verify || "").trim(),
+    revision: Number(proposal.revision) || 1,
+    source: String(proposal.source || (explicit ? "model" : "local")),
+    feedback: Array.isArray(proposal.feedback) ? proposal.feedback : [],
+    revisions: Array.isArray(proposal.revisions) ? proposal.revisions : [],
+    // The generated plan's original worker/skill choice. The Studio badges
+    // fields still at their default and lets the manager snap back to it;
+    // manager edits never touch this record, regeneration re-baselines it.
+    // First seen without one → the current values ARE the baseline.
+    defaults: {
+      proposed_worker: String((proposal.defaults && proposal.defaults.proposed_worker) || proposal.proposed_worker || artifact?.proposed_worker || "pip").trim() || "pip",
+      selected_skills: ((proposal.defaults && Array.isArray(proposal.defaults.selected_skills) ? proposal.defaults.selected_skills : null) || (Array.isArray(proposal.selected_skills) ? proposal.selected_skills : []))
+        .map((item) => String(item).trim()).filter(Boolean),
+    },
+  }));
+}
+
+function validateProposals(artifact) {
+  const explicit = Array.isArray(artifact?.task_proposals) && artifact.task_proposals.length;
+  const proposals = normalizeProposals(artifact);
+  if (explicit && !proposals.length) throw new Error("task_proposals must not be empty when present");
+  const ids = new Set();
+  for (const [index, proposal] of proposals.entries()) {
+    if (!proposal.id || !proposal.title) throw new Error(`task proposal ${index + 1} needs an id and a title`);
+    if (ids.has(proposal.id)) throw new Error(`task proposal ids must be unique (${proposal.id} repeats)`);
+    ids.add(proposal.id);
+    if (!proposal.completion_checks.length) throw new Error(`task proposal ${proposal.id} needs at least one completion check`);
+    if (!proposal.objective) throw new Error(`task proposal ${proposal.id} needs an objective`);
+  }
+  for (const proposal of proposals) {
+    for (const dep of proposal.depends_on) {
+      if (dep === proposal.id) throw new Error(`task proposal ${proposal.id} cannot depend on itself`);
+      if (!ids.has(dep)) throw new Error(`task proposal ${proposal.id} depends on unknown proposal ${dep}`);
+    }
+  }
+  const ordered = [];
+  const visiting = new Set();
+  const visited = new Set();
+  const byId = new Map(proposals.map((proposal) => [proposal.id, proposal]));
+  function visit(proposal) {
+    if (visiting.has(proposal.id)) throw new Error(`task proposal dependency cycle includes ${proposal.id}`);
+    if (visited.has(proposal.id)) return;
+    visiting.add(proposal.id);
+    for (const dep of proposal.depends_on) visit(byId.get(dep));
+    visiting.delete(proposal.id);
+    visited.add(proposal.id);
+    ordered.push(proposal);
+  }
+  for (const proposal of proposals) visit(proposal);
+  return ordered;
+}
+
+function nextProposalId(proposals) {
+  let max = 0;
+  for (const proposal of proposals) {
+    const match = /^p(\d+)$/.exec(proposal.id);
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  return `p${max + 1}`;
+}
+
+function loadEditableDraft(root, draft) {
+  const loaded = typeof draft === "string" ? loadPlanDraft(root, draft) : draft;
+  if (loaded.stage === "repair") throw new Error("Repair and validate the saved response before editing task cards");
+  if (loaded.stage === "approved") throw new Error("an approved draft is closed to card edits — create a new plan instead");
+  return loaded;
+}
+
+function persistArtifact(root, loaded, artifact, envelopePatch = {}) {
+  const file = path.join(loaded.dir, "artifact.json");
+  return withDraftLock(loaded.dir, () => {
+    const envelope = JSON.parse(fs.readFileSync(file, "utf8"));
+    const currentRevision = Number(envelope.revision) || 1;
+    if (loaded.revision != null && currentRevision !== loaded.revision) {
+      const stale = new Error("plan draft changed while this edit was being prepared; reload and retry");
+      stale.statusCode = 409;
+      throw stale;
+    }
+    envelope.revision = currentRevision + 1;
+    envelope.artifact = artifact;
+    delete envelope.review;
+    if (envelope.artifact) delete envelope.artifact.review;
+    envelope.saved_at = new Date().toISOString();
+    for (const [key, value] of Object.entries(envelopePatch)) envelope[key] = value;
+    writeArtifactEnvelope(file, envelope);
+    return loadPlanDraft(root, loaded.id);
+  });
+}
+
+function cloneArtifact(loaded) {
+  return JSON.parse(JSON.stringify(loaded.artifact || {}));
+}
+
+const ARRAY_FIELDS = new Set(["completion_checks", "selected_skills", "depends_on", "files", "requirement_ids", "deliverables"]);
+const asArray = (field, value) => {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === "string") {
+    if (field === "completion_checks") return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    return value.split(/[,;]/).map((item) => item.trim()).filter(Boolean);
+  }
+  throw new Error(`${field} must be a list`);
+};
+
+// Manager card edits are validated in full before anything is written, so a
+// rejected edit always leaves the last valid draft on disk untouched. Field
+// aliases match the CLI flags (worker/skills/checks/depends-on).
+const FIELD_ALIASES = { worker: "proposed_worker", skills: "selected_skills", checks: "completion_checks", "depends-on": "depends_on" };
+export function editProposal(root, draft, proposalId, patch = {}) {
+  const loaded = loadEditableDraft(root, draft);
+  const artifact = cloneArtifact(loaded);
+  const proposals = normalizeProposals(artifact);
+  const index = proposals.findIndex((proposal) => proposal.id === proposalId);
+  if (index < 0) throw new Error(`task proposal ${proposalId} not found in draft ${loaded.id}`);
+  const prior = proposals[index];
+  const next = { ...prior };
+  for (const [rawField, value] of Object.entries(patch || {})) {
+    const field = FIELD_ALIASES[rawField] || rawField;
+    if (value === undefined) continue;
+    if (field === "title" || field === "objective" || field === "verify" || field === "proposed_worker" || field === "instructions") {
+      const text = String(value).trim();
+      if (!text && field !== "verify") throw new Error(`proposal ${field} must not be empty`);
+      next[field] = field === "title" ? text.slice(0, 240) : text;
+    } else if (ARRAY_FIELDS.has(field)) {
+      next[field] = asArray(field, value);
+    } else if (field === "skill_reasons" && value && typeof value === "object" && !Array.isArray(value)) {
+      next.skill_reasons = Object.fromEntries(Object.entries(value).map(([skill, reason]) => [String(skill), String(reason).trim()]));
+    } else if (field !== "id" && field !== "revision" && field !== "source" && field !== "revisions" && field !== "feedback") {
+      throw new Error(`unknown proposal field ${field}`);
+    }
+  }
+  if (!next.title || !next.objective || !next.completion_checks.length) throw new Error(`proposal ${proposalId} still needs a title, objective, and at least one completion check`);
+  const others = new Set(proposals.filter((proposal) => proposal.id !== proposalId).map((proposal) => proposal.id));
+  for (const dep of next.depends_on) {
+    if (dep === proposalId) throw new Error(`task proposal ${proposalId} cannot depend on itself`);
+    if (!others.has(dep)) throw new Error(`task proposal ${proposalId} depends on unknown proposal ${dep}`);
+  }
+  next.revision = prior.revision + 1;
+  next.source = "manager-edit";
+  next.revisions = [...prior.revisions, { rev: prior.revision, at: new Date().toISOString(), source: prior.source, proposal: prior }];
+  proposals[index] = next;
+  artifact.task_proposals = proposals;
+  return persistArtifact(root, loaded, artifact);
+}
+
+export function addProposal(root, draft, patch = {}) {
+  const loaded = loadEditableDraft(root, draft);
+  const artifact = cloneArtifact(loaded);
+  const proposals = normalizeProposals(artifact);
+  const id = nextProposalId(proposals);
+  proposals.push({
+    id,
+    title: String(patch.title || "New task card").trim().slice(0, 240),
+    objective: String(patch.objective || patch.title || "Describe the bounded outcome for this card.").trim(),
+    completion_checks: asArray("completion_checks", patch.completion_checks ?? "The bounded outcome is observable in a real verification command."),
+    proposed_worker: String(patch.proposed_worker || "pip").trim() || "pip",
+    selected_skills: asArray("selected_skills", patch.selected_skills ?? []),
+    depends_on: [],
+    files: asArray("files", patch.files ?? []),
+    verify: String(patch.verify || "").trim(),
+    revision: 1,
+    source: "manager-edit",
+    feedback: [],
+    revisions: [],
+  });
+  const created = proposals.at(-1);
+  created.defaults = { proposed_worker: created.proposed_worker, selected_skills: [...created.selected_skills] };
+  artifact.task_proposals = proposals;
+  return persistArtifact(root, loaded, artifact);
+}
+
+export function removeProposal(root, draft, proposalId) {
+  const loaded = loadEditableDraft(root, draft);
+  const artifact = cloneArtifact(loaded);
+  const proposals = normalizeProposals(artifact);
+  const index = proposals.findIndex((proposal) => proposal.id === proposalId);
+  if (index < 0) throw new Error(`task proposal ${proposalId} not found in draft ${loaded.id}`);
+  if (proposals.length === 1) throw new Error("a plan needs at least one task card — edit it instead of removing the last one");
+  proposals.splice(index, 1);
+  for (const proposal of proposals) proposal.depends_on = proposal.depends_on.filter((dep) => dep !== proposalId);
+  artifact.task_proposals = proposals;
+  return persistArtifact(root, loaded, artifact);
+}
+
+export function reorderProposals(root, draft, proposalId, position) {
+  const loaded = loadEditableDraft(root, draft);
+  const artifact = cloneArtifact(loaded);
+  const proposals = normalizeProposals(artifact);
+  const index = proposals.findIndex((proposal) => proposal.id === proposalId);
+  if (index < 0) throw new Error(`task proposal ${proposalId} not found in draft ${loaded.id}`);
+  const [moved] = proposals.splice(index, 1);
+  const target = Math.max(0, Math.min(proposals.length, Number(position) || 0));
+  proposals.splice(target, 0, moved);
+  artifact.task_proposals = proposals;
+  return persistArtifact(root, loaded, artifact);
+}
+
+export function addProposalFeedback(root, draft, proposalId, text) {
+  const prompt = String(text || "").trim();
+  if (!prompt) throw new Error("card feedback needs a prompt");
+  const loaded = loadEditableDraft(root, draft);
+  const artifact = cloneArtifact(loaded);
+  const proposals = normalizeProposals(artifact);
+  const proposal = proposals.find((item) => item.id === proposalId);
+  if (!proposal) throw new Error(`task proposal ${proposalId} not found in draft ${loaded.id}`);
+  proposal.feedback = [...(proposal.feedback || []), { at: new Date().toISOString(), text: prompt }];
+  artifact.task_proposals = proposals;
+  return persistArtifact(root, loaded, artifact);
+}
+
+// One bounded model call regenerates ONE card. The prior version is kept in
+// the card's revision history, every other card is untouched, and any failure
+// (refused call, timeout, malformed JSON) leaves the draft exactly as it was.
+export async function regenerateProposal(root, draft, proposalId, { invoke, confirm = false, budget = null, provider = null, model = null, role = "pip" } = {}) {
+  if (!confirm) throw new Error("Plan Studio provider calls require explicit confirmation");
+  if (typeof invoke !== "function") throw new Error("Plan Studio needs a provider invoke function");
+  if (budget) {
+    const gate = usageGate(budget);
+    if (!gate.ok) throw new Error(`Plan Studio provider call refused: ${gate.reason}`);
+  }
+  const loaded = loadEditableDraft(root, draft);
+  const artifact = cloneArtifact(loaded);
+  const proposals = normalizeProposals(artifact);
+  const index = proposals.findIndex((proposal) => proposal.id === proposalId);
+  if (index < 0) throw new Error(`task proposal ${proposalId} not found in draft ${loaded.id}`);
+  const prior = proposals[index];
+  const request = {
+    schema: PLAN_SCHEMA_VERSION,
+    task: "Regenerate exactly one ATL task proposal using the manager feedback.",
+    intent: loaded.intent,
+    current_proposal: prior,
+    project_evidence: planningEvidence(root, artifact, { repoRoot: resolvePlanRepository(root, loaded).repoRoot }),
+    feedback: prior.feedback || [],
+    required: ["title", "objective", "instructions", "requirement_ids", "deliverables", "skill_reasons", "completion_checks", "proposed_worker", "selected_skills", "depends_on", "files", "verify"],
+    rule: "Return JSON only: a single proposal object. Never change other tasks. Do not claim checks passed or execute anything.",
+  };
+  const logPath = path.join(loaded.dir, "provider.log");
+  const response = await invoke({ root, role, request, logPath });
+  if (!response || response.code !== 0) throw new Error(response?.providerFailure?.reason || `Plan provider failed (code ${response?.code ?? "unknown"})`);
+  const text = String(response.text || response.output || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  let returned;
+  try { returned = JSON.parse(text); } catch { throw new Error("Plan provider did not return valid JSON"); }
+  const body = returned && typeof returned === "object" && returned.proposal && typeof returned.proposal === "object" ? returned.proposal : returned;
+  const next = {
+    ...prior,
+    title: String(body.title || prior.title).trim().slice(0, 240) || prior.title,
+    objective: String(body.objective || prior.objective).trim(),
+    instructions: String(body.instructions ?? prior.instructions ?? "").trim(),
+    requirement_ids: asArray("requirement_ids", body.requirement_ids ?? prior.requirement_ids),
+    deliverables: asArray("deliverables", body.deliverables ?? prior.deliverables),
+    skill_reasons: body.skill_reasons ?? prior.skill_reasons,
+    completion_checks: asArray("completion_checks", body.completion_checks ?? body.verify ?? prior.completion_checks),
+    proposed_worker: String(body.proposed_worker || prior.proposed_worker).trim() || prior.proposed_worker,
+    selected_skills: asArray("selected_skills", body.selected_skills ?? prior.selected_skills),
+    depends_on: (Array.isArray(body.depends_on) ? body.depends_on : prior.depends_on).map((item) => String(item).trim()).filter((dep) => dep !== proposalId && proposals.some((item) => item.id === dep)),
+    files: asArray("files", body.files ?? prior.files),
+    verify: String(body.verify || prior.verify || "").trim(),
+    resource_estimate: body.resource_estimate || prior.resource_estimate || null,
+  };
+  if (!next.title || !next.objective || !next.completion_checks.length) throw new Error("Plan provider returned an incomplete task proposal");
+  next.revision = prior.revision + 1;
+  next.source = "model";
+  // The regenerated model output is the new baseline: its worker/skills are
+  // what "default" means for this card from now on.
+  next.defaults = { proposed_worker: next.proposed_worker, selected_skills: [...next.selected_skills] };
+  next.revisions = [...prior.revisions, { rev: prior.revision, at: new Date().toISOString(), source: prior.source, proposal: prior }];
+  proposals[index] = next;
+  artifact.task_proposals = proposals;
+  return persistArtifact(root, loaded, artifact, {
+    provider: response.provider || provider || loaded.provider || null,
+    model: response.model || model || loaded.model || null,
+    resource_decision: response.resource_decision || null,
+    last_regenerated: { proposal_id: proposalId, at: new Date().toISOString() },
+  });
+}
+
+// Honest labelling: the Studio never presents a local structural draft as a
+// model plan or the other way around.
+export function planDraftLabel(loaded) {
+  const via = loaded.generated_via || (loaded.provider ? "provider" : "local");
+  const provider = loaded.provider || null;
+  const model = loaded.model || null;
+  return via === "provider"
+    ? { mode: "model", label: `Model plan · ${provider || "provider"}${model ? ` / ${model}` : ""}`, provider, model, generated_at: loaded.saved_at || null }
+    : { mode: "local", label: "Local skeleton · deterministic structure — not approvable, complete with a model plan", provider: null, model: null, generated_at: loaded.saved_at || null };
+}
+
+// Stage-specific schema gates for the intermediate SDD artifacts. A frame
+// stays deliberately incomplete, a specify artifact must bound the behavior
+// with observable acceptance examples, and a route artifact must name the
+// skills, worker, and provider before anything plans implementation steps.
+export function validateStageArtifact(stage, artifact) {
+  if (stage === "repair") return true; // quarantined response; all execution gates refuse it
+  if (stage === "frame") {
+    if (!artifact || !artifact.title || !artifact.objective) throw new Error("frame artifact needs title and objective");
+    return true;
+  }
+  if (stage === "specify") {
+    const required = ["title", "objective", "completion_checks", "acceptance_examples", "in_scope", "out_of_scope"];
+    const missing = required.filter((key) => !artifact || artifact[key] == null || (Array.isArray(artifact[key]) && artifact[key].length === 0));
+    if (missing.length) throw new Error(`specify artifact missing: ${missing.join(", ")}`);
+    if (!Array.isArray(artifact.acceptance_examples) || !artifact.acceptance_examples.every((item) => item && item.given && item.when && item.then)) {
+      throw new Error("specify acceptance_examples must contain given/when/then");
+    }
+    if (!Array.isArray(artifact.completion_checks) || !artifact.completion_checks.every((item) => typeof item === "string" && item.trim())) {
+      throw new Error("specify completion_checks must be non-empty strings");
+    }
+    return true;
+  }
+  if (stage === "route") {
+    const required = ["title", "objective", "selected_skills", "skill_route", "proposed_worker"];
+    const missing = required.filter((key) => !artifact || artifact[key] == null || (Array.isArray(artifact[key]) && artifact[key].length === 0));
+    if (missing.length) throw new Error(`route artifact missing: ${missing.join(", ")}`);
+    if (!Array.isArray(artifact.skill_route) || !artifact.skill_route.every((item) => item && item.skill && item.reason)) {
+      throw new Error("skill_route must contain skill/reason entries");
+    }
+    return true;
+  }
+  if (["plan", "review", "approved"].includes(stage)) return validatePlanArtifact(artifact);
+  throw new Error(`unknown plan stage ${stage}`);
+}
+
+function stageDir(draft) {
+  return typeof draft === "string" ? null : draft.dir || null;
+}
+
+function readStages(root, draft) {
+  const dir = stageDir(draft);
+  if (!dir) return [];
+  const stages = [];
+  for (const name of PLAN_STAGES) {
+    const file = path.join(dir, `stage-${name}.json`);
+    if (fs.existsSync(file)) {
+      try { stages.push(JSON.parse(fs.readFileSync(file, "utf8"))); } catch { /* a torn stage file never blocks the studio */ }
+    }
+  }
+  return stages;
+}
+
+// Persist the next SDD stage for an existing draft. The raw intent file is
+// never rewritten; each stage lands in its own schema-checked file so the
+// chain intent → frame → specify → route → plan stays auditable.
+export function advanceStage(root, draft, stage, patch = {}) {
+  if (!PLAN_STAGES.includes(stage)) throw new Error(`unknown plan stage ${stage}`);
+  const loaded = typeof draft === "string" ? loadPlanDraft(root, draft) : draft;
+  if (loaded.stage === "approved") throw new Error("an approved draft is closed to new stages");
+  const artifact = {
+    ...(loaded.artifact || {}),
+    title: loaded.artifact?.title || titleOf(loaded.intent),
+    objective: loaded.artifact?.objective || loaded.intent,
+    ...patch,
+    stage,
+  };
+  validateStageArtifact(stage, artifact);
+  const dir = loaded.dir;
+  fs.writeFileSync(path.join(dir, `stage-${stage}.json`), JSON.stringify({ schema: PLAN_SCHEMA_VERSION, stage, artifact, saved_at: new Date().toISOString() }, null, 2) + "\n");
+  if (["plan", "review", "approved"].includes(stage)) {
+    withDraftLock(dir, () => {
+      const file = path.join(dir, "artifact.json");
+      const envelope = JSON.parse(fs.readFileSync(file, "utf8"));
+      const currentRevision = Number(envelope.revision) || 1;
+      if (loaded.revision != null && currentRevision !== loaded.revision) {
+        const stale = new Error("plan draft changed while this stage was being prepared; reload and retry");
+        stale.statusCode = 409;
+        throw stale;
+      }
+      envelope.revision = currentRevision + 1;
+      envelope.stage = stage;
+      envelope.artifact = artifact;
+      envelope.saved_at = new Date().toISOString();
+      writeArtifactEnvelope(file, envelope);
+    });
+  }
+  return { ...loaded, stage, artifact, stages: readStages(root, { dir }) };
+}
+
+export function savePlanDraft(root, { intent, artifact, stage = "plan", id = null, sourceTaskId = null, repository = null } = {}) {
+  if (!intent) throw new Error("plan draft needs intent");
+  // Every persisted stage is schema-checked: frames stay deliberately
+  // incomplete, specify/route artifacts must bound behavior and route, and
+  // only a plan that claims review/approval may be a complete final artifact.
+  validateStageArtifact(stage, artifact || null);
+  const draftId = id || `${new Date().toISOString().replace(/[:.]/g, "-")}-${slug(artifact?.title || intent)}`;
+  const dir = path.join(path.dirname(paths(root).state), "plan-studio", draftId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "intent.md"), String(intent).trimEnd() + "\n");
+  let sourceRevision = null;
+  if (sourceTaskId) { try { sourceRevision = loadState(root).tasks[sourceTaskId]?.source?.revision || null; } catch { /* legacy fixture without state */ } }
+  fs.writeFileSync(path.join(dir, "artifact.json"), JSON.stringify({ schema: PLAN_SCHEMA_VERSION, revision: 1, stage, artifact: artifact || null, source_task_id: sourceTaskId || null, source_revision_at_creation: sourceRevision, repository: repository || null, saved_at: new Date().toISOString() }, null, 2) + "\n");
+  return { id: draftId, dir, intentPath: path.join(dir, "intent.md"), artifactPath: path.join(dir, "artifact.json"), revision: 1, stage, artifact: artifact || null, source_task_id: sourceTaskId || null, repository: repository || null };
+}
+
+export function loadPlanDraft(root, id) {
+  if (typeof id !== "string" || !id || id === "." || id === ".." || /[\\/:]/.test(id)) throw new Error("Invalid plan draft id");
+  const dir = path.join(path.dirname(paths(root).state), "plan-studio", id);
+  const file = path.join(dir, "artifact.json");
+  if (!fs.existsSync(file)) throw new Error(`Unknown plan draft ${id}`);
+  const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+  return { ...saved, revision: Number(saved.revision) || 1, id, dir, intent: fs.readFileSync(path.join(dir, "intent.md"), "utf8") };
+}
+
+export function archivePlanDraft(root, id) {
+  const draft = loadPlanDraft(root, id);
+  let tasks = {};
+  try { tasks = loadState(root).tasks || {}; }
+  catch (error) { if (!/No state file/.test(error.message)) throw error; }
+  const referenced = Object.values(tasks).some((task) => task.plan_draft_id === id);
+  const queued = Object.values(loadQueueBook(root).queues || {}).some((queue) => queue.plan_draft_id === id);
+  if (referenced || queued) throw new Error("An approved or queued plan cannot be deleted. Remove its queue and task links first.");
+  const archive = path.join(path.dirname(paths(root).state), "plan-studio-archive");
+  fs.mkdirSync(archive, { recursive: true });
+  const target = path.join(archive, `${id}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+  fs.renameSync(draft.dir, target);
+  return { id, archived_at: new Date().toISOString(), archive_path: target };
+}
+
+// Recovery drafts are separate from any previous valid draft. Keep the exact
+// response and request context even when JSON parsing/normalization fails.
+function savePlanRecovery(root, { id, intent, text, reason, provider, model, sourceTaskId, repository, projectEvidence }) {
+  const recoveryId = `${id}-repair-${crypto.randomUUID().slice(0, 8)}`;
+  const draft = savePlanDraft(root, { id: recoveryId, intent, artifact: null, stage: "repair", sourceTaskId, repository });
+  const envelope = JSON.parse(fs.readFileSync(draft.artifactPath, "utf8"));
+  Object.assign(envelope, { provider, model, generated_via: "provider", recovery: { response: text, reason, project_evidence: projectEvidence, provider_log_draft_id: id } });
+  writeArtifactEnvelope(draft.artifactPath, envelope);
+  return loadPlanDraft(root, recoveryId);
+}
+
+export function repairPlanDraft(root, id, text, { expectedRevision = null } = {}) {
+  const loaded = loadPlanDraft(root, id);
+  if (loaded.stage !== "repair") throw new Error("Only a recovery draft can be repaired through this editor");
+  const parsed = JSON.parse(String(text));
+  const artifact = normalizePlanContract(normalizeModelEvidence(normalizeModelArtifact(parsed)), loaded.intent);
+  if (artifact.plan_contract_version !== PLAN_CONTRACT_VERSION) throw new Error("Repaired plans must satisfy Plan Contract v2");
+  validatePlanArtifact(artifact);
+  const { repoRoot } = resolvePlanRepository(root, loaded);
+  validatePlanGrounding(root, artifact, { repoRoot });
+  artifact.task_proposals = normalizeProposals(artifact).map((proposal) => ({ ...proposal, source: "model" }));
+  for (const proposal of artifact.task_proposals) for (const skill of proposal.selected_skills) {
+    if (!isSkillAvailable(root, skill)) throw new Error(`Plan task ${proposal.id} selects unavailable skill ${skill}`);
+  }
+  return withDraftLock(loaded.dir, () => {
+    const envelope = JSON.parse(fs.readFileSync(path.join(loaded.dir, "artifact.json"), "utf8"));
+    if (envelope.stage !== "repair" || expectedRevision != null && envelope.revision !== expectedRevision) throw new Error("Recovery draft changed; reload before saving your repair");
+    envelope.revision = (Number(envelope.revision) || 1) + 1;
+    envelope.stage = "plan";
+    envelope.artifact = artifact;
+    delete envelope.review;
+    delete envelope.artifact.review;
+    envelope.saved_at = new Date().toISOString();
+    writeArtifactEnvelope(path.join(loaded.dir, "artifact.json"), envelope);
+    return loadPlanDraft(root, id);
+  });
+}
+
+// A plan queue id is derived deterministically from the draft, so re-approval
+// always finds the same queue instead of duplicating workstreams.
+function planQueueId(loaded) {
+  const title = String(loaded.artifact?.title || loaded.intent || "plan");
+  // Queue ids are capped at 32 chars (queueCreate) — 5 + 17 + 1 + 6 = 29.
+  // The suffix hashes the whole draft id: drafts of one request (one per
+  // linked repository) share their slug tail and would otherwise collide.
+  return `plan-${slug(title).slice(0, 17) || "draft"}-${crypto.createHash("sha1").update(String(loaded.id)).digest("hex").slice(0, 6)}`;
+}
+
+// Deep-review policy (egmReview.policy in manager.json). Evaluated for the
+// approval gate and surfaced on the draft so the manager sees the
+// requirement before clicking approve. Disabled unless configured.
+const COMPLEXITY_RANK = { simple: 0, standard: 1, complex: 2, critical: 3 };
+function globMatches(pattern, file) {
+  const normalized = String(file).replaceAll("\\", "/");
+  const rx = new RegExp("^" + pattern.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
+  return rx.test(normalized);
+}
+
+export function reviewPolicyCheck(root, artifact, review) {
+  let policy;
+  try { policy = readResourceConfig(root)?.egmReview?.policy; } catch { policy = null; }
+  if (!policy || policy.requireDeepReview !== true) return { required: false, reasons: [] };
+  const reasons = [];
+  const min = String(policy.minComplexity || "").toLowerCase();
+  const proposals = artifact?.task_proposals || [];
+  if (min && COMPLEXITY_RANK[min] !== undefined && proposals.some((proposal) => (COMPLEXITY_RANK[proposal.resource_estimate?.complexity] ?? 1) >= COMPLEXITY_RANK[min])) reasons.push(`task complexity at or above "${min}"`);
+  if (Array.isArray(policy.maxTaskProposals) === false && Number.isInteger(policy.maxTaskProposals) && proposals.length > policy.maxTaskProposals) reasons.push(`more than ${policy.maxTaskProposals} task proposals`);
+  const globs = Array.isArray(policy.touchGlobs) ? policy.touchGlobs : [];
+  if (globs.length && proposals.some((proposal) => (proposal.files || []).some((f) => globs.some((g) => globMatches(g, f))))) reasons.push(`touches protected paths (${globs.join(", ")})`);
+  const required = reasons.length > 0;
+  const satisfied = required && review?.kind === "egm" && review?.verdict === "passed";
+  return { required, reasons, satisfied };
+}
+
+function approvePlanDraftUnlocked(root, draft, { note = "approved by manager in Plan Studio", sourceRevisionCurrent = false } = {}) {
+  const loaded = typeof draft === "string" ? loadPlanDraft(root, draft) : draft;
+  if (loaded.stage === "repair") throw new Error("Repair and validate this saved response before approval or queueing");
+  const artifact = loaded.artifact;
+  // The repository binding decides which codebase approval grounds against.
+  // An unresolvable binding (unregistered, moved, not git) blocks approval;
+  // the draft and its source request stay untouched.
+  const repo = resolvePlanRepository(root, loaded);
+  const repoRoot = repo.repoRoot;
+  validatePlanArtifact(artifact);
+  const review = loaded.review || artifact.review;
+  if (artifact.plan_contract_version !== PLAN_CONTRACT_VERSION || !review || review.verdict !== "passed" || review.fingerprint !== planFingerprint({ ...artifact, review: undefined }, loaded.intent, { project: planningEvidence(root, artifact, { repoRoot }), source_revision: review.source_revision || null })) throw new Error("Plan approval blocked: this draft needs a fresh, passing accuracy review");
+  const policyCheck = reviewPolicyCheck(root, artifact, review);
+  if (policyCheck.required && !policyCheck.satisfied) throw new Error(`Plan approval blocked: the deep-review policy requires an EGM review for this plan (${policyCheck.reasons.join("; ")})`);
+  validatePlanGrounding(root, artifact, { repoRoot });
+  const proposals = validateProposals(artifact);
+  if (loaded.source_task_id) {
+    const sourceTask = loadState(root).tasks[loaded.source_task_id];
+    const draftIndex = planDraftIndex(root);
+    const siblings = draftIndex.filter((entry) => entry.source_task_id === loaded.source_task_id && entry.id !== loaded.id);
+    const alreadyApproved = draftIndex.some((entry) => entry.id === loaded.id && entry.approved);
+    if (!sourceTask || (!["github", "azure", "jira"].includes(sourceTask.source?.type)) || (!sourceTask.plan_review_required && sourceTask.plan_reviewed_by_draft !== loaded.id && !alreadyApproved)) throw new Error("Plan approval blocked: the imported GitHub/Azure/Jira source task is missing or no longer awaits review");
+    const rival = repo.repository_id ? siblings.find((entry) => entry.approved && entry.repository?.id === repo.repository_id) : null;
+    if (rival && !alreadyApproved) throw repositoryBindingError(`Plan approval blocked: ${repo.repository_name} already has an approved plan for this request (draft ${rival.id}, queue ${rival.queue_id || "unknown"}). Each linked repository gets one plan per request.`);
+    if (!sourceRevisionCurrent) throw new Error("Plan approval blocked: imported sources must be rechecked live through Plan Studio before approval");
+    if (review.source_revision?.current !== true || String(review.source_revision.remote_id) !== String(sourceTask.source.remote_id) || String(review.source_revision.revision) !== String(sourceTask.source.revision)) throw new Error("Plan approval blocked: the imported source revision was not freshly verified");
+  }
+  if (artifact.plan_contract_version === PLAN_CONTRACT_VERSION) for (const proposal of proposals) {
+    for (const skill of proposal.selected_skills) if (!isSkillAvailable(root, skill)) throw new Error(`Plan approval blocked: task ${proposal.id} selects unavailable skill ${skill}`);
+    for (const skill of proposal.selected_skills) if (!String(proposal.skill_reasons?.[skill] || "").trim()) throw new Error(`Plan approval blocked: task ${proposal.id} needs a reason for ${skill}`);
+  }
+  validateContracts(Object.fromEntries(proposals.map((proposal) => [proposal.id, proposal])));
+  const state = loadState(root);
+  const existing = Object.values(state.tasks).filter((task) => task.plan_draft_id === loaded.id);
+  if (existing.length) {
+    const ordered = proposals.flatMap((proposal) => existing.filter((task) => task.plan_proposal_id === proposal.id));
+    const taskIds = (ordered.length ? ordered : existing).map((task) => task.id);
+    return { task: taskIds.length ? state.tasks[taskIds[0]] : null, tasks: taskIds.map((id) => state.tasks[id]), taskIds, queueId: existing[0].plan_queue_id || null, created: false, draft: loaded };
+  }
+  // Approval creates the dedicated Plan Queue plus one ordered canonical task
+  // per card — membership only, never execution. Execution still needs the
+  // queue preview and an explicit run confirmation.
+  const queueId = planQueueId(loaded);
+  const book = loadQueueBook(root);
+  if (!book.queues[queueId]) {
+    queueCreate(root, queueId, {
+      name: String(artifact.title || "Plan").slice(0, 60),
+      provider: loaded.provider ? `${loaded.provider}${loaded.model ? `/${loaded.model}` : ""}` : null,
+    });
+    const queue = loadQueue(root, queueId);
+    queue.plan_draft_id = loaded.id;
+    if (repo.repository_id) queue.repository_id = repo.repository_id;
+    saveQueue(root, queue);
+  }
+  const createdIds = new Map();
+  const originalIntent = String(loaded.intent || (loaded.intentPath && fs.existsSync(loaded.intentPath) ? fs.readFileSync(loaded.intentPath, "utf8") : "")).trim();
+  for (const proposal of proposals) {
+    const proposalObjective = proposal.objective || artifact.objective;
+    const objective = originalIntent && !proposalObjective.includes(originalIntent) ? `${proposalObjective}\n\nOriginal request (context):\n${originalIntent}` : proposalObjective;
+    const task = createTaskInWorkspace(root, {
+      title: proposal.title,
+      objective,
+      completion_checks: proposal.completion_checks,
+      risk: artifact.risk || "normal",
+      labels: [...new Set([...(artifact.labels || []), "plan-studio"])],
+      selected_skills: proposal.selected_skills || [],
+      proposed_worker: proposal.proposed_worker || "pip",
+      skill_route: artifact.skill_route || null,
+      source: { type: "plan-studio", draft_id: loaded.id, proposal_id: proposal.id },
+    });
+    const nextState = loadState(root);
+    const stored = nextState.tasks[task.id];
+    stored.plan_draft_id = loaded.id;
+    stored.plan_proposal_id = proposal.id;
+    stored.plan_queue_id = queueId;
+    stored.plan_artifact_path = loaded.artifactPath;
+    if (repo.repository_id) {
+      stored.repository_id = repo.repository_id;
+      stored.repository_name = repo.repository_name;
+    }
+    stored.plan_approval_note = note;
+    stored.plan_depends_on = (proposal.depends_on || []).map((dep) => createdIds.get(dep)).filter(Boolean);
+    stored.dispatch_contract = proposal.dispatch_contract;
+    stored.instructions = proposal.instructions;
+    stored.deliverables = proposal.deliverables;
+    stored.requirement_ids = proposal.requirement_ids;
+    stored.skill_reasons = proposal.skill_reasons;
+    stored.files = proposal.files;
+    stored.resource_estimate = proposal.resource_estimate;
+    stored.check_owners = Object.fromEntries(Object.entries(proposal.check_owners || {}).map(([check, owner]) => [check, createdIds.get(owner) || (owner === proposal.id ? task.id : owner)]));
+    if (proposal.id === proposals.at(-1).id) {
+      stored.integrated_delivery = true;
+      stored.integrated_checks = [...new Set(proposals.flatMap((item) => item.completion_checks))];
+      stored.plan_depends_on = [...createdIds.values()];
+      stored.review_required = true;
+    }
+    const allocation=budgetDecision(readResourceConfig(root),stored);
+    stored.resource_estimate = {...(stored.resource_estimate||{}),assessment:allocation.assessment};
+    // Runtime owns the first actual allocation so an explicit run limit still applies.
+    nextState.updated_at = new Date().toISOString();
+    nextState.log.push({ at: new Date().toISOString(), task: task.id, actor: "manager", event: "plan_approve", detail: `${note} (card ${proposal.id}, rev ${proposal.revision})` });
+    fs.writeFileSync(paths(root).state + ".tmp", JSON.stringify(nextState, null, 2) + "\n");
+    fs.renameSync(paths(root).state + ".tmp", paths(root).state);
+    queueAdd(root, task.id, { queueId });
+    createdIds.set(proposal.id, task.id);
+  }
+  // Freeze what the approval grounded against: registry id, canonical path,
+  // and the bound repository's HEAD at approval time.
+  if (repo.repository_id) {
+    const file = path.join(loaded.dir, "artifact.json");
+    const envelope = JSON.parse(fs.readFileSync(file, "utf8"));
+    envelope.repository = { id: repo.repository_id, name: repo.repository_name, root: repo.repository_root, revision: planGitRevision(repoRoot), captured_at: new Date().toISOString() };
+    writeArtifactEnvelope(file, envelope);
+  }
+  const after = loadState(root);
+  const taskIds = proposals.map((proposal) => createdIds.get(proposal.id)).filter(Boolean);
+  if (loaded.source_task_id) {
+    const sourceState = loadState(root);
+    const sourceTask = sourceState.tasks[loaded.source_task_id];
+    // A request linked to several repositories stays open for planning until
+    // every linked repository has its own approved plan.
+    const plannedRepositories = new Set(planDraftIndex(root).filter((entry) => entry.source_task_id === sourceTask.id && entry.approved && entry.repository?.id).map((entry) => entry.repository.id));
+    if (repo.repository_id) plannedRepositories.add(repo.repository_id);
+    const unplanned = requestRepositoryIds(sourceTask).filter((id) => !plannedRepositories.has(id));
+    sourceTask.plan_review_required = unplanned.length > 0;
+    sourceTask.intake_only = true;
+    sourceTask.plan_reviewed_by_draft = loaded.id;
+    // Imported external requests are planning inputs, never executable work.
+    // Remove stale queue membership created by an earlier intake flow so only
+    // the reviewed plan children enter execution queues.
+    for (const existingQueue of queueList(root, { includeArchived: true })) queueRemove(root, sourceTask.id, { queueId: existingQueue.id });
+    sourceState.log.push({ at: new Date().toISOString(), task: sourceTask.id, actor: "manager", event: "external_source_plan_reviewed", detail: `Reviewed source through Plan Studio draft ${loaded.id}${repo.repository_name ? ` for ${repo.repository_name}` : ""}${unplanned.length ? ` · ${unplanned.length} linked repositor${unplanned.length === 1 ? "y" : "ies"} still need a plan` : ""}` });
+    sourceState.updated_at = new Date().toISOString();
+    saveState(root, sourceState, { expectedRevision: sourceState.revision || 0 });
+  }
+  return { task: after.tasks[taskIds[0]], tasks: taskIds.map((id) => after.tasks[id]), taskIds, queueId, created: true, draft: loaded };
+}
+
+export function approvePlanDraft(root, draft, options = {}) {
+  const loaded = typeof draft === "string" ? loadPlanDraft(root, draft) : draft;
+  return withDraftLock(loaded.dir, () => approvePlanDraftUnlocked(root, loaded.id, options));
+}
+
+export async function runPlanProvider(root, intent, { role = "pip", provider, confirm = false, invoke, draftId = null, budget = null, sourceTaskId = null, repositoryId = null } = {}) {
+  if (!confirm) throw new Error("Plan Studio provider calls require explicit confirmation");
+  if (typeof invoke !== "function") throw new Error("Plan Studio needs a provider invoke function");
+  // Usage gate: an exhausted local budget blocks the provider call before any
+  // spend; an unknown remote quota never blocks (it is surfaced, not guessed).
+  if (budget) {
+    const gate = usageGate(budget);
+    if (!gate.ok) throw new Error(`Plan Studio provider call refused: ${gate.reason}`);
+  }
+  // Planning inspects the repository the source request is bound to (or the
+  // explicitly chosen one), not the server's own project. An unresolvable
+  // binding refuses the spend up front.
+  const repo = sourceTaskId || repositoryId ? resolvePlanRepository(root, { source_task_id: sourceTaskId || null, repository_id: repositoryId || null }) : { repository_id: null, repository_name: null, repository_root: null, repository_revision: null, repoRoot: null };
+  const approvedHere = sourceTaskId && repo.repository_id ? planDraftIndex(root).find((entry) => entry.source_task_id === sourceTaskId && entry.approved && entry.repository?.id === repo.repository_id) : null;
+  if (approvedHere) throw repositoryBindingError(`${repo.repository_name} already has an approved plan for this request (draft ${approvedHere.id}). Plan another linked repository instead; no provider call was made.`);
+  const repoRoot = repo.repoRoot;
+  const request = {
+    schema: PLAN_SCHEMA_VERSION,
+    task: "Convert the intent into an evidence-gated ATL SDD/TDD plan.",
+    intent: String(intent).trim(),
+    project_evidence: planningEvidence(root, null, { repoRoot }),
+    required: ["plan_contract_version", "title", "objective", "requirements", "constraints", "observed_evidence", "assumptions", "open_questions", "risks", "completion_checks", "acceptance_examples", "selected_skills", "proposed_worker", "implementation_steps", "task_proposals", "verifier_commands"],
+    field_shapes: {
+      observed_evidence: [{ path: "An existing repository-relative file or directory, or an HTTPS source URL", description: "What the supplied evidence establishes", revision: "Required for HTTPS sources; omit for local paths" }],
+      assumptions: ["Unverified claims belong here, not in observed_evidence"],
+      open_questions: [{ id: "q1", question: "Unresolved consequential decision", suggested_answers: ["A grounded candidate answer", "A different grounded candidate"], blocks_approval: true }],
+      completion_checks: ["Non-empty check statement; use strings, not objects"],
+      selected_skills: ["Exact installed skill name"], proposed_worker: "pip",
+      requirements: [{ id: "r1", source: "original intent", text: "Requirement statement" }],
+      acceptance_examples: [{ given: "Context", when: "Action", then: "Observable outcome" }],
+      implementation_steps: [{ step: "Concrete action", files: [], verify: "Existing project verifier" }],
+      task_proposals: [{ id: "p1", title: "Bounded task", objective: "Requested outcome", instructions: "Concrete implementation instructions as a string", files: [], deliverables: ["Concrete output"], requirement_ids: ["r1"], completion_checks: ["Observable outcome"], verify: "Existing project verifier as a string", selected_skills: ["Exact installed skill name"], skill_reasons: { "Exact installed skill name": "Reason for assignment" }, proposed_worker: "pip", depends_on: [] }],
+      verifier_commands: ["Existing project verifier"],
+    },
+    rule: "Return JSON only. Use plan_contract_version 2. Every requirement has a stable id and source. Each task has requirement_ids, concrete instructions, affected files grounded in supplied repository evidence (or empty for discovery), deliverables, independently satisfiable completion_checks, verify, and selected_skills with a skill_reasons entry for every skill. Add resource_estimate {complexity: simple|standard|complex|critical, reason: grounded effort/risk explanation} per task. Resource estimates are advisory; runtime enforces owner budgets and model ceilings. Include observed_evidence, assumptions, and open_questions separately. For each consequential open question, provide 2–4 concise suggested_answers only when they are grounded in supplied evidence or clearly labelled as a decision option; omit suggestions rather than inventing facts. Preserve original intent. Do not invent commands, paths, project facts, or skills; unresolved consequential decisions go in open_questions and block approval. Dependencies must exist and be acyclic. Do not claim checks passed; do not execute commands or change files.",
+  };
+  const id = draftId || `${Date.now()}-${slug(titleOf(intent))}`;
+  const logPath = path.join(path.dirname(paths(root).state), "plan-studio", id, "provider.log");
+  // Post-invoke failures carry the transcript path so the browser can offer
+  // the raw model response next to the error message.
+  // A schema-rejected response stays review-only, but its complete text is
+  // retained on the error so Card 03 can show the attempted plan in full.
+  // It is never saved as an approvable draft.
+  const repository = repo.repository_id ? { id: repo.repository_id, name: repo.repository_name, root: repo.repository_root, revision: planGitRevision(repoRoot), captured_at: new Date().toISOString() } : null;
+  const withLog = (message, providerResponse = null, response = null) => {
+    const error = Object.assign(new Error(message), { providerLogPath: logPath, providerResponse });
+    if (providerResponse != null) {
+      try { error.recoveryDraft = savePlanRecovery(root, { id, intent, text: providerResponse, reason: message, provider: response?.provider || provider || null, model: response?.model || null, sourceTaskId, repository, projectEvidence: request.project_evidence }); }
+      catch (saveError) { error.message += `; recovery could not be saved: ${saveError.message}. The full response is included below.`; }
+    }
+    return error;
+  };
+  const response = await invoke({ root, role, request, logPath });
+  if (!response || response.code !== 0) throw withLog(response?.providerFailure?.reason || `Plan provider failed (code ${response?.code ?? "unknown"})`, response?.text || response?.output || null);
+  const text = String(response.text || response.output || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  let artifact;
+  try { artifact = JSON.parse(text); } catch { throw withLog("Plan provider did not return valid JSON", text, response); }
+  try {
+    const normalized = normalizePlanContract(normalizeModelEvidence(normalizeModelArtifact(artifact)), intent);
+    if (normalized.plan_contract_version !== PLAN_CONTRACT_VERSION || !Array.isArray(artifact.task_proposals) || !Array.isArray(artifact.requirements) || !Array.isArray(artifact.observed_evidence) || !Array.isArray(artifact.assumptions) || !Array.isArray(artifact.open_questions)) throw new Error("provider plan must explicitly satisfy Plan Contract v2");
+    validatePlanArtifact(normalized);
+    validatePlanGrounding(root, normalized, { repoRoot });
+  } catch (error) {
+    let message = error.message;
+    if (/verifier_commands/.test(message)) message += ` — the model could not ground verifier commands in ${repoRoot ? `the assigned repository "${repo.repository_name}" (${repo.repository_root})` : `this project (${path.resolve(root)})`}. If this task belongs to a different repository, assign it to that repository under Projects (or run ATL from that project's folder) so planning reads the right code.`;
+    throw withLog(message, text, response);
+  }
+  // Model output that only returned implementation steps still gets typed,
+  // editable task cards (1:1 from the steps) before anything is persisted —
+  // and every card from a provider plan is honestly labelled model output.
+  artifact = normalizePlanContract(normalizeModelEvidence(normalizeModelArtifact(artifact)), intent);
+  artifact.task_proposals = normalizeProposals(artifact).map((proposal) => ({ ...proposal, source: "model" }));
+  artifact.task_proposals = normalizePlanContract(artifact, intent).task_proposals;
+  validatePlanGrounding(root, artifact, { repoRoot });
+  for (const proposal of artifact.task_proposals) {
+    for (const skill of proposal.selected_skills || []) if (!isSkillAvailable(root, skill)) throw withLog(`Plan task ${proposal.id} selects unavailable skill ${skill}`, text, response);
+  }
+  const draft = savePlanDraft(root, { intent, artifact, stage: "plan", id, sourceTaskId, repository: repo.repository_id ? { id: repo.repository_id, name: repo.repository_name, root: repo.repository_root, revision: planGitRevision(repoRoot), captured_at: new Date().toISOString() } : null });
+  // Skill/provider/model selection stays visible on the draft: the manager
+  // approves knowing exactly who planned it and through which provider.
+  const envelope = JSON.parse(fs.readFileSync(draft.artifactPath, "utf8"));
+  envelope.provider = response.provider || provider || null;
+  envelope.model = response.model || null;
+  envelope.role = role;
+  envelope.resource_decision = response.resource_decision || null;
+  envelope.generated_via = response.provider ? "provider" : "custom-invoke";
+  fs.writeFileSync(draft.artifactPath, JSON.stringify(envelope, null, 2) + "\n");
+  return { ...draft, provider: envelope.provider, model: envelope.model, resource_decision:envelope.resource_decision, role };
+}

@@ -1,0 +1,13 @@
+{
+  "name": "atl-marketplace",
+  "owner": {
+    "name": "depie99",
+    "url": "https://github.com/depie99"
+  },
+  "plugins": [
+    {
+      "name": "agent-trust-ladder",
+      "source": "./claude"
+    }
+  ]
+}

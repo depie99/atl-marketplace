@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "atl": {
+      "command": "node",
+      "args": [
+        "runtime/atl-plugin-mcp.mjs"
+      ],
+      "cwd": "."
+    }
+  }
+}

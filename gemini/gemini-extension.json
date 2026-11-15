@@ -1,0 +1,13 @@
+{
+  "name": "agent-trust-ladder",
+  "version": "0.6.10",
+  "mcpServers": {
+    "atl": {
+      "command": "node",
+      "args": [
+        "${extensionPath}/runtime/atl-plugin-mcp.mjs"
+      ]
+    }
+  },
+  "contextFileName": "GEMINI.md"
+}

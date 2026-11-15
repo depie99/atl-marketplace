@@ -1,0 +1,48 @@
+{
+  "name": "agent-trust-ladder",
+  "version": "0.6.10",
+  "description": "Full ATL: engineering skills, workflows, persistent tasks, bounded execution and the local Control Plane.",
+  "author": {
+    "name": "depie99",
+    "url": "https://github.com/depie99"
+  },
+  "homepage": "https://github.com/depie99/Agent-Trust-Ladder",
+  "repository": "https://github.com/depie99/Agent-Trust-Ladder",
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "trust",
+    "verification",
+    "specification"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "mcpServers": {
+    "atl": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${ZCODE_PLUGIN_ROOT}/runtime/atl-plugin-mcp.mjs"
+      ],
+      "cwd": "${ZCODE_PROJECT_DIR}",
+      "env": {
+        "ATL_PLUGIN_PROJECT": "${ZCODE_PROJECT_DIR}"
+      }
+    }
+  },
+  "ui": {
+    "surfaces": [
+      {
+        "id": "control-plane",
+        "title": {
+          "en-US": "ATL Control Plane",
+          "zh-CN": "ATL 控制台"
+        },
+        "icon": "gauge",
+        "server": "atl",
+        "resourceUri": "ui://atl/control-plane.html",
+        "availability": "session"
+      }
+    ]
+  }
+}
