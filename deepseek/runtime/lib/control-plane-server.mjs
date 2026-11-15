@@ -1025,6 +1025,19 @@ export function buildWindowsMyTasksStartupScript({ nodePath, runtimeEntry, proje
   return `Set shell = CreateObject("WScript.Shell")\r\nshell.CurrentDirectory = "${root}"\r\nshell.Environment("PROCESS").Item("ATL_NO_OPEN") = "1"\r\nshell.Run """${node}"" """${entry}"" ui", 0, False\r\n`;
 }
 
+// Snapshot fingerprint with per-build volatile stamps removed: build timestamps
+// must not make an unchanged dashboard look changed to delta clients.
+const VOLATILE_SNAPSHOT_KEYS = ['captured_at', 'checked_at', 'created_at', 'updated_at'];
+const stableSnapshotFingerprint = value => {
+  if (Array.isArray(value)) return value.map(stableSnapshotFingerprint);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value)) if (!VOLATILE_SNAPSHOT_KEYS.includes(key)) out[key] = stableSnapshotFingerprint(value[key]);
+    return out;
+  }
+  return value;
+};
+
 export function createControlPlaneServer(root, { host = "127.0.0.1", planningInvoke = null, planningRoot = null, usageFetch = globalThis.fetch, publishFetch = globalThis.fetch, assetRoot = path.dirname(CONTROL_PLANE_FILE), readOnlyPreview = false, intakeAdapters = {}, egmRunner = null, myTasksFetch = null, myTasksReviewInvoke = null, taskTriageInvoke = null, jiraTransportCall = null, azureFetch = globalThis.fetch } = {}) {
   if (!new Set(["127.0.0.1", "::1", "localhost"]).has(host)) throw new Error("control plane only supports loopback hosts");
   const seam = { planningInvoke, planningRoot: planningRoot || root, usageFetch, publishFetch, intakeAdapters, egmRunner, azureFetch };
@@ -1127,15 +1140,20 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
   // Build the snapshot once per tick and push it to connected streams only when
   // it actually changed: an idle dashboard then costs one in-process build and
   // zero wire bytes per tick instead of a full snapshot per client every 2 s.
-  let cachedFrame = null; // { cursor, json } of the latest built snapshot
-  let forceFullNextConnect = false; // set on any content change, even without log growth
+  // Each changed frame gets a monotonically increasing version; reconnecting
+  // clients echo the version they hold and receive a tiny liveness block while
+  // they are already up to date.
+  let cachedFrame = null; // { cursor, content, json } of the latest built snapshot
+  let frameVersion = 0;
+  let forceFullNextConnect = false; // set on any content change, even without version growth
   const streamTimer = setInterval(() => {
-    let frame;
-    try { const snapshot = createControlPlaneSnapshot(root); frame = { cursor: snapshot.state?.log?.length || 0, json: JSON.stringify({ cursor: snapshot.state?.log?.length || 0, snapshot }) }; } catch { return; }
-    if (cachedFrame && cachedFrame.json === frame.json) return;
+    let snapshot, content;
+    try { snapshot = createControlPlaneSnapshot(root); content = JSON.stringify({ ...snapshot, captured_at: null }); } catch { return; }
+    if (cachedFrame && cachedFrame.content === content) return;
+    frameVersion += 1;
     forceFullNextConnect = Boolean(cachedFrame); // a real change; the first cached build is not one
-    cachedFrame = frame;
-    for (const stream of streams) { try { stream.res.write(`event: snapshot\ndata: ${frame.json}\n\n`); } catch { streams.delete(stream); } }
+    cachedFrame = { cursor: frameVersion, content, json: JSON.stringify({ cursor: frameVersion, snapshot }) };
+    for (const stream of streams) { try { stream.res.write(`event: snapshot\ndata: ${cachedFrame.json}\n\n`); } catch { streams.delete(stream); } }
   }, 2000);
   streamTimer.unref?.();
   return http.createServer(async (req, res) => {
@@ -1286,7 +1304,10 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           forceFullNextConnect = false;
         } else {
           const snapshot = createControlPlaneSnapshot(root);
-          res.write(`event: snapshot\ndata: ${JSON.stringify({ cursor: snapshot.state?.log?.length || 0, snapshot })}\n\n`);
+          const content = JSON.stringify(stableSnapshotFingerprint(snapshot));
+          frameVersion += 1;
+          cachedFrame = { cursor: frameVersion, content, json: JSON.stringify({ cursor: frameVersion, snapshot }) };
+          res.write(`event: snapshot\ndata: ${cachedFrame.json}\n\n`);
         }
         const stream = { res }; streams.add(stream); req.on("close", () => streams.delete(stream)); return;
       }

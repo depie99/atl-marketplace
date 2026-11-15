@@ -1,6 +1,6 @@
 {
   "name": "@depie99/atl-plugin",
-  "version": "0.6.13",
+  "version": "0.6.14",
   "description": "Full ATL: engineering skills, workflows, persistent tasks, bounded execution and the local Control Plane.",
   "type": "module",
   "license": "MIT",
