@@ -14,18 +14,24 @@ export async function frameBootstrap({ id, theme }) {
   }
   class PanelEventSource extends EventTarget {
     readyState = 0;
-    constructor(url) { super(); this.url = url; this.controller = new AbortController(); this.poll(); }
+    constructor(url) { super(); this.sourceUrl = url; this.cursor = Number(new URL(url, 'http://atl.invalid/').searchParams.get('cursor') || 0); this.controller = new AbortController(); this.poll(); }
     close() { this.readyState = 2; clearTimeout(this.timer); this.controller.abort(); }
+    // Each poll carries the newest cursor, so an unchanged workspace costs a tiny
+    // liveness block instead of a full snapshot re-download every two seconds.
+    eventsUrl() { return `${this.sourceUrl.split('?')[0]}?cursor=${this.cursor}`; }
     async poll() {
       try {
-        const response = await panelFetch(this.url, { signal: this.controller.signal });
+        const response = await panelFetch(this.eventsUrl(), { signal: this.controller.signal });
         if (!response.ok) throw new Error(`Snapshot failed (${response.status})`);
         if (this.readyState === 2) return;
         this.readyState = 1;
         for (const block of (await response.text()).split('\n\n')) {
           const lines = block.split('\n');
           const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
-          if (data) this.dispatchEvent(new MessageEvent(lines.find(line => line.startsWith('event:'))?.slice(6).trim() || 'message', { data }));
+          if (data) {
+            try { const parsedCursor = Number(JSON.parse(data).cursor); if (Number.isFinite(parsedCursor) && parsedCursor !== this.cursor) this.cursor = parsedCursor; } catch { /* blocks without a cursor keep the current one */ }
+            this.dispatchEvent(new MessageEvent(lines.find(line => line.startsWith('event:'))?.slice(6).trim() || 'message', { data }));
+          }
         }
         this.timer = setTimeout(() => this.poll(), 2000);
       } catch (error) { if (this.readyState !== 2) { this.readyState = 0; this.onerror?.(error); } }

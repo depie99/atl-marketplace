@@ -1027,7 +1027,9 @@ export function buildWindowsMyTasksStartupScript({ nodePath, runtimeEntry, proje
 
 // Snapshot fingerprint with per-build volatile stamps removed: build timestamps
 // must not make an unchanged dashboard look changed to delta clients.
-const VOLATILE_SNAPSHOT_KEYS = ['captured_at', 'checked_at', 'created_at', 'updated_at'];
+// observed_at is derived (newest evidence stamp, falling back to the volatile
+// state.updated_at), so scheduler rewrites would otherwise dirty every tick.
+const VOLATILE_SNAPSHOT_KEYS = ['captured_at', 'checked_at', 'created_at', 'updated_at', 'observed_at'];
 const stableSnapshotFingerprint = value => {
   if (Array.isArray(value)) return value.map(stableSnapshotFingerprint);
   if (value && typeof value === 'object') {
@@ -1148,7 +1150,7 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
   let forceFullNextConnect = false; // set on any content change, even without version growth
   const streamTimer = setInterval(() => {
     let snapshot, content;
-    try { snapshot = createControlPlaneSnapshot(root); content = JSON.stringify({ ...snapshot, captured_at: null }); } catch { return; }
+    try { snapshot = createControlPlaneSnapshot(root); content = JSON.stringify(stableSnapshotFingerprint(snapshot)); } catch { return; }
     if (cachedFrame && cachedFrame.content === content) return;
     frameVersion += 1;
     forceFullNextConnect = Boolean(cachedFrame); // a real change; the first cached build is not one
@@ -1159,7 +1161,6 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", `http://${host}`);
-      if (process.env.ATL_DEBUG_ROUTES) console.error(`[routes] raw=${JSON.stringify(req.url)} pathname=${JSON.stringify(url.pathname)}`);
       if (readOnlyPreview && !["GET", "HEAD", "OPTIONS"].includes(req.method || "GET")) { json(res, 403, { ok: false, error: "Synthetic UI preview is read-only; live task actions are unavailable." }); return; }
       // A browser may only mutate this loopback service from its own origin.
       // Command-line clients have no Origin header and remain supported.
@@ -1203,7 +1204,10 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         if (cachedFrame && !forceFullNextConnect && cursor > 0 && cursor === cachedFrame.cursor) {
           json(res, 200, { unchanged: true, cursor });
         } else {
-          const payload = cachedFrame ? JSON.parse(cachedFrame.json).snapshot : createControlPlaneSnapshot(root);
+          // A fresh read (no cursor) must never serve a pre-mutation cached
+          // frame: build current state so recent mutations are visible
+          // immediately; only cursor-holding pollers ride the cache.
+          const payload = cursor > 0 && cachedFrame ? JSON.parse(cachedFrame.json).snapshot : createControlPlaneSnapshot(root);
           json(res, 200, { ...payload, cursor: cachedFrame?.cursor ?? 1 });
           forceFullNextConnect = false;
         }
@@ -1468,6 +1472,9 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         const payload = JSON.parse(await readBody(req) || "{}");
         const command = String(payload.command || "").trim();
         const result = dispatchTuiCommand(root, command, { selectedTaskId: payload.selectedTaskId || null });
+        // A mutation must be readable immediately: drop the cached delta frame
+        // so the next read and the next stream tick rebuild post-mutation state.
+        cachedFrame = null;
         json(res, result.ok ? 200 : 400, result);
         return;
       }

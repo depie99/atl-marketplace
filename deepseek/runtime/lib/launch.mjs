@@ -276,7 +276,7 @@ export async function driveTaskUntilGate(root, taskId, budget, {
   // queue launches; previously they issued credentials with no valid lease.
   budget.taskSessions ||= new Map();
   if (!lease && !dryRun) {
-    const ownedLease = acquireLease(root, { project: path.resolve(root), task: taskId, role: nextRole(loadState(root).tasks[taskId]) || "rowan", run: budget.runId || `local-${process.pid}-${Date.now()}` });
+    const ownedLease = acquireLease(root, { project: path.resolve(root), task: taskId, role: nextRole(loadState(root).tasks[taskId]) || "rowan", run: budget.runId || `local-${process.pid}-${Date.now()}`, ttlMs: 900000 });
     const heartbeat = setInterval(() => { try { heartbeatLease(root, ownedLease); } catch { /* fenced requests fail closed */ } }, 5000);
     try {
       return await driveTaskUntilGate(root, taskId, budget, { overnight, dryRun, worker, auth, envPolicy, resolveWorker, lease: ownedLease, onProgress, onSession, pauseAfterSession, onReview, echo, contractRepair });
@@ -950,7 +950,7 @@ export async function executeLaunchQueue(root, { maxMinutes = 120, maxSessions =
     }
     say(root, "runner", `launch queue: taking ${fresh.id} — ${fresh.title}`, { task: fresh.id });
     let lease;
-    try { lease = acquireLease(root, { project: path.resolve(root), task: fresh.id, role: fresh.assigned_worker || "rowan", run: runId || "preview" }); }
+    try { lease = acquireLease(root, { project: path.resolve(root), task: fresh.id, role: fresh.assigned_worker || "rowan", run: runId || "preview", ttlMs: 900000 }); }
     catch (error) { results.push({ id: fresh.id, status: "queued", reason: error.message, lease: false }); onProgress(`${fresh.id}: ${error.message}`); continue; }
     const leaseHeartbeat = setInterval(() => { try { heartbeatLease(root, lease); } catch { /* expiry is surfaced at the next mutation */ } }, 5000);
     try {

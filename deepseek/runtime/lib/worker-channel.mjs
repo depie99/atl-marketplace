@@ -93,7 +93,12 @@ export function createWorkerChannel(root, { workspace, task, role, credential, c
     lastHeartbeat = Date.now();
   };
   const authenticate = () => {
-    if (!validateWorkerCredential(credential, { project: path.resolve(root), task, role, run: credential.run, generation: credential.generation }) || !leaseAllows(root, { key: credential.lease_key, id: credential.lease_id, generation: credential.generation })) throw new Error("Worker handoff rejected: expired credential or stale lease.");
+    const credOk = validateWorkerCredential(credential, { project: path.resolve(root), task, role, run: credential.run, generation: credential.generation });
+    const leaseOk = leaseAllows(root, { key: credential.lease_key, id: credential.lease_id, generation: credential.generation });
+    if (!credOk || !leaseOk) {
+      const current = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, ".trust", "manager", "leases.json"), "utf8")).sessions[credential.lease_key] || null; } catch { return null; } })();
+      throw new Error(`Worker handoff rejected: expired credential or stale lease. (credential=${credOk ? "ok" : "invalid"}; lease=${leaseOk ? "ok" : `file=${current ? `status=${current.status} gen=${current.generation} expires_at=${new Date(current.expires_at).toISOString()} now=${new Date().toISOString()}` : "absent"} credential id=${credential.lease_id} gen=${credential.generation}`})`);
+    }
   };
   authenticate(); status("ready");
   const handle = async (name) => {

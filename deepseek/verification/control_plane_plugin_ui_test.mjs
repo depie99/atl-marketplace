@@ -123,11 +123,17 @@ try {
     await page.locator('[data-task="T-101"] .task-main-copy').click();
     await page.locator(".task-detail-screen").waitFor();
     assert.equal(await page.locator(".task-detail-screen details").first().evaluate(el => el.open), true, "disclosure state survives Back + reopen");
-    // A second, different task selection (Done row through the filter).
+    // A second, different task selection (Blocked row through the filter).
+    // Done tasks ship off the board to the Shipped archive, so the Done
+    // filter must show no rows here.
     await page.getByRole("button", { name: "← Back" }).click();
+    await page.screenshot({ path: ".tmp-ui-review/pluginui-before-done-filter.png", fullPage: true }).catch(() => {});
     await page.locator('.tasks-seg-btn[data-action="filter:Done"]').click();
-    await page.locator('[data-task="T-104"] .task-main-copy').click();
-    await page.getByText("with a deliberately long title", { exact: false }).first().waitFor();
+    assert.equal(await page.locator(".task-row").count(), 0, "Done rows ship off the board to the Shipped archive");
+    await page.locator('.tasks-seg-btn[data-action="filter:Blocked"]').click();
+    await page.screenshot({ path: ".tmp-ui-review/pluginui-after-done-filter.png", fullPage: true }).catch(() => {});
+    await page.locator('[data-task="T-103"] .task-main-copy').click();
+    await page.locator(".task-detail-screen").waitFor();
     // Resize into the split range and select from the list instead.
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.getByRole("button", { name: "← Back" }).click();
@@ -142,14 +148,16 @@ try {
   {
     const { context, page } = await openPluginPage();
     await page.locator('[data-task="T-102"]').waitFor();
-    await context.route("**/api/events", route => route.abort());
-    await context.route("**/api/snapshot", route => route.abort());
+    // The delta client polls /api/snapshot?cursor=N — the glob must cover the
+    // query string or the abort never matches and the page stays live.
+    await context.route("**/api/events*", route => route.abort());
+    await context.route("**/api/snapshot*", route => route.abort());
     await page.locator("#plugin-topbar").getByText("● offline").waitFor({ timeout: 15000 });
     await page.getByRole("button", { name: "Retry" }).waitFor();
     await page.locator('[data-task="T-102"]').waitFor({ state: "visible" });
     await page.getByRole("button", { name: "Retry" }).click();
-    await context.unroute("**/api/events");
-    await context.unroute("**/api/snapshot");
+    await context.unroute("**/api/events*");
+    await context.unroute("**/api/snapshot*");
     await page.locator("#plugin-topbar").getByText("● live").waitFor({ timeout: 15000 });
     await context.close();
   }

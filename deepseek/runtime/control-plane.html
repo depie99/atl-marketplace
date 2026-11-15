@@ -2335,6 +2335,40 @@ textarea.input {
   font-size: 11px;
 }
 
+.shipped-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.shipped-queue-name {
+  font-weight: 800;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shipped-queue-head .btn.shipped-collapse {
+  min-width: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.shipped-queue-collapsed .shipped-queue-head {
+  border-bottom: 0;
+}
+
+.shipped-queue-collapsed .shipped-queue-body {
+  display: none;
+}
+
 .tableitem.task-row {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(175px, 0.75fr) minmax(230px, auto);
