@@ -3,7 +3,7 @@
   "version": "0.6.15",
   "runtimeVersion": "0.2.0",
   "content": {
-    "sha256": "fcb304dd26222fb2b790ed6f0cc6b1dd8ffb3daa047f562c5d6142842c184c7f",
+    "sha256": "43591c4e55b2d5ec89b31a1712f14c2abdb776e977f87647dfa592dd4351f155",
     "files": {
       "runtime/README.md": "a9d922fccd188cd48171c12d013f6724aab8ba59dd154255f9b7f5bb72d0d237",
       "runtime/assets/atl-logo.svg": "1c12870ee9b3e90ea07dde99510d498c841d7a97c760d588a2a616237de13861",
@@ -326,7 +326,6 @@
       "commands/atl-trust.md": "c8043e6b6fd73cb9ca4e58c4590ee420fdeb0d95a914411f1f7d0de0ea74051e",
       "commands/atl-verify.md": "060f1592533281cbc6bb97e120da58c55c7e80fa11ad9c19fe682f6646f6bda1",
       "commands/atl.md": "18d28138fc0ab4d4561ec83bb0c53d1309864568fdbb9e10c49cb62edc5c78d9",
-      "verification/.debug_stream.mjs": "581f14a3ec0b92e2e0950fef4378e1bd0d987f4dfe8ea8b292072e04d12d8c1b",
       "verification/README.md": "b3e5a6f56a286cbdfeac3a19e8f7b57938e15a14138b0e906072c4f6de09ffae",
       "verification/approval_test.mjs": "f4dedf74e1e1bbd9213cdf71b4b6428b14132b2e448794feb9725c8fb8d98586",
       "verification/atl_lifecycle_model.py": "2b762adb070f44d183ebaf9936ed2b4cb99a9eed25f9fd4a00abeb9e594bf145",
