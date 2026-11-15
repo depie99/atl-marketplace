@@ -17,7 +17,9 @@ each supported harness — no build step required on your side.
 | [`deepseek/`](deepseek/) | DeepSeek Harness (`dsh`) |
 | [`universal/`](universal/) | Any harness with local MCP tools |
 
-DeepSeek release: **0.6.11**, with an embedded Control Plane. Other harness bundles: **0.6.10**.
+DeepSeek release: **0.6.12**, with an embedded Control Plane whose workspace reopens
+automatically after tab switches and reloads and recovers from a dead control plane.
+Other harness bundles: **0.6.10**.
 
 Project home and documentation: [depie99/Agent-Trust-Ladder](https://github.com/depie99/Agent-Trust-Ladder)
 · [Docs site](https://depie99.github.io/Agent-Trust-Ladder/)

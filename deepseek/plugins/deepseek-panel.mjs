@@ -7,7 +7,7 @@ import { frameBootstrap } from './deepseek-frame.mjs';
 export function registerDeepSeekPanel(ctx, host) {
   const panels = new Map();
   const json = (value, status = 200) => Response.json(value, { status, headers: { 'cache-control': 'no-store' } });
-  function panelFor(id) { const panel = panels.get(id); if (!panel) throw new Error('Panel expired. Open the project again.'); return panel; }
+  function panelFor(id) { const entry = panels.get(id); if (!entry) throw new Error('Panel expired. Open the project again.'); return entry.gateway; }
   const register = (path, methods, handler) => ctx.connection.fetch.register({ path, methods, requestBody: 'buffered', async fetch(request) {
     try { return await handler(request); } catch (error) { return json({ error: error.message }, 400); }
   } });
@@ -16,9 +16,18 @@ export function registerDeepSeekPanel(ctx, host) {
     if (typeof project !== 'string' || !project.trim()) throw new Error('Enter an absolute project directory.');
     // openPanel validates the project path and starts no workers.
     const panel = await host.openPanel(project.trim());
-    const existing = [...panels].find(([, gateway]) => gateway.panel.project === panel.project);
-    const id = existing?.[0] || randomUUID();
-    if (!existing) panels.set(id, await createPanelGateway(panel));
+    const generation = host.serverGeneration;
+    let reuse = null;
+    for (const [id, entry] of panels) {
+      if (entry.gateway.panel.project !== panel.project) continue;
+      if (entry.generation === generation) { reuse = id; break; }
+      // A gateway pinned to a server generation that died is dropped; the freshly
+      // spawned control plane takes over under a new panel id.
+      panels.delete(id);
+    }
+    if (reuse) return json({ id: reuse, project: panel.project });
+    const id = randomUUID();
+    panels.set(id, { gateway: await createPanelGateway(panel), generation });
     return json({ id, project: panel.project });
   });
   register('/api/atl/request', ['POST'], async request => {

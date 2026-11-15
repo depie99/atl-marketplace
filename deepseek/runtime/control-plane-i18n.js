@@ -17,6 +17,8 @@
     "Sprint": "اسپرینت",
     "Work item": "مورد کاری",
     "⟳ Sprints": "⟳ اسپرینت‌ها",
+    "Workflow runs": "اجرای گردش‌کارها",
+    "Select a workflow run": "یک اجرا را انتخاب کنید",
     "Not connected": "متصل نیست",
     "Connect Azure Boards once from": "ابتدا یک‌بار از صفحهٔ",
     "(PAT with Work Items: Read), then open": "اتصال دهید (PAT با دسترسی خواندن Work Items)، سپس",

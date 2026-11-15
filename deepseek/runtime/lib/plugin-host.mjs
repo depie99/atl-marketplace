@@ -37,7 +37,8 @@ function validate(tool, args) {
 
 function projectPath(value) {
   if (!path.isAbsolute(value)) throw new Error('project must be an absolute path.');
-  const root = fs.realpathSync(value);
+  let root;
+  try { root = fs.realpathSync(value); } catch { throw new Error(`Directory not found: ${value}`); }
   if (!fs.statSync(root).isDirectory()) throw new Error('project must be a directory.');
   const relative = path.relative(fs.realpathSync(bundleRoot), root);
   if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) throw new Error('Select an application outside the plugin installation.');
@@ -50,6 +51,10 @@ export function createPluginHost() {
   const jobs = new Map();
   const servers = new Map();
   const embedToken = randomUUID();
+  // Bumped every time a per-project control plane is spawned. Panel gateways pin
+  // the generation they were built against, so a gateway pinned to a server that
+  // died is recognizable and replaceable instead of being reused forever.
+  let serverGeneration = 0;
   let closed = false;
   let connectionAssistant;
   const outputLimit = 65536 ;
@@ -184,6 +189,7 @@ export function createPluginHost() {
       // prevents a second project's server from sharing those execution controls.
       const job = command(root, ['ui', '--host', '127.0.0.1', '--port', '0', '--no-open'], { interfaceProcess: true });
       createdUi = job;
+      serverGeneration += 1;
       const pending = new Promise((resolve, reject) => {
         const timer = setTimeout(() => { void stopJob(job); reject(new Error('Control Plane did not start within 15 seconds.')); }, 15000);
         const observe = () => {
@@ -223,5 +229,5 @@ export function createPluginHost() {
     url.searchParams.set('atl_embed', embedToken);
     return { url: url.href, origin: url.origin, project: result.project };
   }
-  return { call, close, openPanel };
+  return { call, close, openPanel, get serverGeneration() { return serverGeneration; } };
 }

@@ -67,5 +67,5 @@ export async function frameBootstrap({ id, theme }) {
     const observer = new MutationObserver(syncTheme);
     observer.observe(parent.document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
     addEventListener('pagehide', () => observer.disconnect(), { once: true });
-  } catch (error) { document.body.textContent = `ATL could not open: ${error.message}. Return to the ATL panel and retry.`; }
+  } catch (error) { document.body.textContent = `ATL could not open: ${error.message}. Reopen the project from the ATL panel to reconnect.`; }
 }

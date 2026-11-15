@@ -55,6 +55,9 @@ try {
     const { context, page } = await openPluginPage({ viewport: { width: 768, height: 900 } });
     await page.locator('#mobile [data-page="tasks"]').waitFor();
     for (const destination of ["tasks", "attention", "activity", "more"]) await page.locator(`#mobile [data-page="${destination}"]`).waitFor();
+    const navIcon = await page.locator('#mobile [data-page="tasks"] svg').evaluate(el => { const s = getComputedStyle(el); return { width: s.width, height: s.height, fill: s.fill, stroke: s.stroke }; });
+    assert.deepEqual([navIcon.width, navIcon.height, navIcon.fill], ["17px", "17px", "none"], "plugin navigation uses compact line icons");
+    assert.notEqual(navIcon.stroke, "none", "plugin navigation icons inherit a visible stroke");
     assert.equal(await page.locator(".sidebar").evaluate(el => getComputedStyle(el).display), "none", "plugin hides the browser sidebar");
     // Reduced filter set; oversized KPI cards are gone.
     for (const status of ["All", "Running", "Blocked", "Done"]) await page.locator(`.tasks-seg-btn[data-action="filter:${status}"]`).waitFor();
@@ -88,6 +91,7 @@ try {
     const wasLight = await page.evaluate(() => document.documentElement.classList.contains("light"));
     await page.getByRole("menuitem", { name: /toggle theme/i }).click();
     await page.waitForFunction((before) => document.documentElement.classList.contains("light") !== before, wasLight);
+    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme), wasLight ? "dark" : "light", "native controls follow the selected theme");
     // Task creation from the compact header.
     await page.locator("#newBtn").click();
     await page.locator("#fTitle").fill("Plugin created task");

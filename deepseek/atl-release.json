@@ -1,9 +1,9 @@
 {
   "format": 3,
-  "version": "0.6.11",
+  "version": "0.6.12",
   "runtimeVersion": "0.2.0",
   "content": {
-    "sha256": "8a8e8f5fadb0cab1bd4ae0c82ebe8ec409531e85374ab63f32ea990d32c81443",
+    "sha256": "b2d8a116f7f35484e6e0ee1837d37ef74f82bfae24f85d553b1939a0640bc95f",
     "files": {
       "runtime/README.md": "a9d922fccd188cd48171c12d013f6724aab8ba59dd154255f9b7f5bb72d0d237",
       "runtime/assets/atl-logo.svg": "1c12870ee9b3e90ea07dde99510d498c841d7a97c760d588a2a616237de13861",
@@ -19,10 +19,10 @@
       "runtime/connect.html": "bb34b59a8e9285124cf6c1eec79851fa70c0a34f1a9001b872176422e6c41f2d",
       "runtime/connect.js": "43a2d8c8660a3dbcf05e99b2ffe29ea099de098c9dd32b7ea29217821cb39a26",
       "runtime/control-plane-changes.js": "718c4ec4bd7732a295fcd61f8fa7161d8c8cfdacf37c60efc880381b4f25009f",
-      "runtime/control-plane-client.js": "e3096fa3a0fc8ff3c152a72ca7be92493fc16b42f785e2b6afeb703440be0cde",
-      "runtime/control-plane-i18n.js": "b054409600517a6740fe650516e57730b857cb902ea70d93c2485d06111c5ed0",
+      "runtime/control-plane-client.js": "06803a09dff124183089b813792ac23f7153ca77b0b22a1ee0fcab802f63dcdc",
+      "runtime/control-plane-i18n.js": "8b9054cdf6b37738e29b5c61298dd8e69a4be501bf65d84ce2d2210c67257237",
       "runtime/control-plane-my-tasks.js": "4891b7a2f9f11712d2e4c4f10a51aa9917af2cceae85dac53a5cfefb08009d37",
-      "runtime/control-plane.html": "366112d3053f4272f223c1f47cdfc87e30eece1dc0e6f533a9e06845e6b95039",
+      "runtime/control-plane.html": "6719aeea85f982611ad30ae8470d17d9543b9778b4a6757bf817565051ad7f99",
       "runtime/defaults/model-routing.json": "1fa0fe26dc7c0c2598f248314f7f8266d261dfc84d96235a63195109d201a58b",
       "runtime/lib/approvals.mjs": "cd619cc78d7ffb91e7ef7d790ecd37ed1f4ffc3a7a4925ec75e4031900fdfc82",
       "runtime/lib/azure-connection.mjs": "c18305e85b54c89660f076195432ba511ecbd7aa6206dbf283b0af5f584b4190",
@@ -68,7 +68,7 @@
       "runtime/lib/plan-model.mjs": "2a43f7d65d248208f1eb5973b6c87065ec43c2747077b605ccc3a35c08520101",
       "runtime/lib/plan-publish.mjs": "7677dc310dd31a548529560ee29627103c84a02202bb1b6055b8a14a18415675",
       "runtime/lib/plan-studio.mjs": "695b796f621996b4259682a7bb946d3d188bd59525ae24acfeffb28e95c2246f",
-      "runtime/lib/plugin-host.mjs": "319e91e5531468c3fa7681b72f8692fc098e4bf05b0e53f4bd64814d0426df04",
+      "runtime/lib/plugin-host.mjs": "c2a4fc31b17a47ad40de2b6dcee6e57988d0722a62fe767dd896b9022576db09",
       "runtime/lib/plugin-panel.mjs": "3f45a28c0883be941b1db7b7d0adc262ff4dd3a824c5c7e8d3837363d316d80e",
       "runtime/lib/plugin-release.mjs": "b939b13573d9fc60e0a681e69952a1483f025cef0212291590a681e89f0cc61c",
       "runtime/lib/project-map.mjs": "fda18511598097e1fe245be069b42ecd96e3307760596c0f314242d408941287",
@@ -114,7 +114,7 @@
       "runtime/prompts/pip.md": "c4e0bbd40eb294a768453a82fb183a9b9df83d9c2609eb103675d148736c40f6",
       "runtime/prompts/rowan.md": "49d5a482053f562bcbc5661c7037c4c24dec1ec699b1d7d325b6d295eb1db0e2",
       "runtime/prompts/sage.md": "dae44dc35accdccc370d8b3babf054ac87b395cd5441da97da78940100e5c3e7",
-      "runtime/scss/_app.scss": "3aa08cca880a7d1ed1863c2b4ddf90e92bdc1ac66c26db5d47897579d017984d",
+      "runtime/scss/_app.scss": "588944fcba8a67157b5943b5805911e4bd3ae30a69757d4c567f84f2909083ef",
       "runtime/scss/_my-tasks.scss": "7d27a10f33d41fbd4a56990d77dd881c893fc00c9894f61cf453f90fe398ab1a",
       "runtime/scss/_plugin.scss": "c8096423038bf97f89682e9818a6ae2dfee6dd863cadaa753978de4e8f86303f",
       "runtime/scss/_sources.scss": "dc626d70a8627fdea21f97ec17a08b5214bc7fd017456717690cfc9eb3e07940",
@@ -351,14 +351,15 @@
       "verification/control_plane_modal_test.mjs": "db9dc4c87822866d6eb463a72ba78496b98735d8c4c496d28d5190b21e807966",
       "verification/control_plane_mutation_feedback_test.mjs": "b115d4d3cc8abf1bf01bfe2e75b2e24384e11870288418c95f27264b19800a31",
       "verification/control_plane_page_reload_test.mjs": "00293c1661c1b02a67b59e1482b8a506b95b8a1c1c664f0c8de10b69586aad89",
-      "verification/control_plane_plugin_ui_test.mjs": "616f5dd324f2bf5201ff9c060caf319efae99d1e5b4b7b5ff8a9e0cde0447864",
+      "verification/control_plane_plugin_ui_test.mjs": "e2ac1cef9995ba064d62ace37e08308e4c99008cfaf694361330d03473e310a7",
       "verification/control_plane_responsive_test.mjs": "d000a279cd5374ba3efeb530b8fd0049a0613d906b64d499b207516857b94bca",
       "verification/control_plane_server_test.mjs": "eb08d1920dad05fe69fd9bf1a4e43a09a01b7a673b6bc991c3a961b2845b4206",
       "verification/control_plane_task_run_test.mjs": "f3dad9b13c43b1b13cdb6c92164e48a48558ce672f826cc4bf74306dbd15a5e6",
       "verification/control_room_test.mjs": "a32ff578b7e134850f44a5aedcda9f93a4609b1befa1d352925d3cfae1c43699",
       "verification/control_room_ui_test.mjs": "65da7442cad283b34a723379e7c72ac5ef4311b5a59791e7c11e32eae20a7cc1",
       "verification/dashboard_test.mjs": "b17402c3b60982cd16de4634ef8df7af81b76f5ad9688bb0f813fcd54b369bf9",
-      "verification/deepseek_panel_test.mjs": "b8a92886ed751d30fb68377737a86d18af7e220156bd601c2f8b9f3f535f5df1",
+      "verification/deepseek_panel_test.mjs": "d6928c0a8b5aaf43179278cfa2dc95f8d8fa3b33e6c444dd71b536a9f5af030e",
+      "verification/deepseek_recovery_test.mjs": "8eee98d72549ceb2658c924f69fb736fd43cda503c3327db39a2819e0b820fcb",
       "verification/dependencies_model.py": "737a8342283e7233ca008fd20aba6b6cf87dd5df4233f5cc9caca24ce4b6f230",
       "verification/developer_delivery_contract_test.mjs": "2d79595634683003a276f4adfcf9a2bd4f7c6ea7bdad6480c87cb105e8a9e3ab",
       "verification/developer_delivery_receipt_test.mjs": "0ea712337014818e62f6c314310ca31076e4c7354fefeaaafbb6afa0735d120e",
@@ -500,9 +501,9 @@
       "verification/worker_windows_timeout_test.mjs": "57adb0abd9bbf7d0697054f7fabf42e5dfbd9992a77a2798280be1fa37078992",
       "verification/workspace_test.mjs": "2e346088d444f6cdcffedba5b6f259e98c56a0a2fb2ede922e9f27b7da7d23bb",
       "plugins/README.md": "e80f8390429daa18b88652b57927f5e2151e64e6f69acda237784509d02e34ea",
-      "plugins/deepseek-client.mjs": "f8f5ef52502571fbea530b4ae5bba6b32a4ef24039b19d098e9e3a6a448934e6",
-      "plugins/deepseek-frame.mjs": "8f2aa539f96a4dce941f7415f07a7d2b9ce479f3b1a7282e9672dc7bb5ced90b",
-      "plugins/deepseek-panel.mjs": "a454a458984ad60dedf32b5b1d0b9f79c5b572a378f7ae778454532e8d79f819",
+      "plugins/deepseek-client.mjs": "7e5936ee06e52ebf8f7f7c30e327e01e5699811e718fb3058ace777e8747482c",
+      "plugins/deepseek-frame.mjs": "3430207e952a564f4c5392d76d2a3a119eaedd82a80271a0a5d0c87c738fb2c9",
+      "plugins/deepseek-panel.mjs": "3b495202a774a70c284d0aae385eac3038d45fbcc0864b8c67788c850f46ae7b",
       "plugins/deepseek.mjs": "486bb2e8146ee807a9eeb134c81e3fb7150878da617146f01ed7de734f81408a",
       "plugins/panel-entry.mjs": "bc93b7d9dae30f81d4f7a0b5bf8012a55ac60be618a8fa082a0f85a6bd08ec72",
       "plugins/panel-template.html": "2057307c10bb73e01b53d6ec53b970a4f754baf6ec005442ab3db55d8260a3ec"
@@ -518,7 +519,7 @@
     "sha256": "ae65fac5926f19a3f0120cae84adf7e670ea70a98ed7240d3ba3d27cb5ef65bb",
     "deepseek": {
       "path": "plugin-ui/deepseek-client.js",
-      "sha256": "dc38f711f5d0bcdb315927f2e5ba6684033b6fb265e96aa53415a8d666b14b38"
+      "sha256": "1ceb5b5c7308386f120b94be907b3fa1d4d561c6151d0038eeb4e88de8dd2fc9"
     }
   }
 }

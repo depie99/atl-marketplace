@@ -27,7 +27,7 @@ const registrations=[];window.__ModuleLoader__={load(entry){window.atl=entry.fac
 </script><script>${client.replaceAll('</script', '<\\/script')}</script><script>
 const root=fixtureRoot(document.getElementById('root'));const slots={inject(name,fn){return fn()},register(meta,component){registrations.push({meta,component});return()=>{}}};
 let active='plugins';const layout={selectPanel(id){active=id;render()}};atl.apply({slots,layout});
-function render(){const entry=registrations.find(r=>active==='plugins'?r.meta.name==='plugins.bundle.config':r.meta.name==='main'&&r.meta.key===active);root.render(fixtureReact.createElement('main',{style:{height:'100vh'}},fixtureReact.createElement(entry.component)))}render();
+function render(){const entry=registrations.find(r=>active==='plugins'?r.meta.name==='plugins.bundle.config':r.meta.name==='main'&&r.meta.key===active);window.__remountSeq=(window.__remountSeq||0)+1;root.render(fixtureReact.createElement('main',{style:{height:'100vh'}},fixtureReact.createElement(entry.component,{key:'m'+window.__remountSeq})))}render();window.rerenderMain=()=>render();
 </script></body></html>`;
 const server = http.createServer(async (req, res) => {
   try {
@@ -48,7 +48,8 @@ let browser;
 try {
   assert.equal((await fetch(url + '/api/atl/open', { method: 'POST' })).status, 401);
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.getByRole('button', { name: 'Open Control Plane', exact: true }).click();
@@ -77,6 +78,25 @@ try {
   const state = JSON.parse(fs.readFileSync(path.join(project, '.trust/manager/state.json')));
   assert.ok(Object.values(state.tasks).some(task => task.title === 'Created inside DeepSeek panel'));
   assert.deepEqual(errors, []);
+
+  // Remount the panel component: dsh unmounts the keyed main slot on every tab
+  // switch and remounts on return, so the panel must survive a fresh React mount.
+  await page.evaluate(() => window.rerenderMain());
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#atl-project').count(), 0, 'panel must survive component remount without showing the project form');
+  await frame.locator('#mobile [data-page="tasks"]').waitFor({ timeout: 30000 });
+  await frame.getByText('Created inside DeepSeek panel', { exact: true }).first().waitFor();
+
+  // Fresh page (reload-like): the workspace auto-opens from persisted memory.
+  const page2 = await context.newPage();
+  const errors2 = [];
+  page2.on('pageerror', error => errors2.push(error.message));
+  await page2.goto(url);
+  await page2.getByRole('button', { name: 'Open Control Plane', exact: true }).click();
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#mobile [data-page="tasks"]').waitFor({ timeout: 30000 });
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').getByText('Created inside DeepSeek panel', { exact: true }).first().waitFor();
+  assert.deepEqual(errors2, []);
+  await page2.close();
   const cookie = 'fixture_owner=1';
   const unknown = await fetch(url + '/api/atl/request', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'missing', path: '/api/snapshot' }) });
   assert.equal(unknown.status, 400);
