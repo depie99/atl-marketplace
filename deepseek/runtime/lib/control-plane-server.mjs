@@ -1124,11 +1124,24 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
     error: durable.error || null,
   } : { status: "idle", queueId: null, taskIds: null, queueIds: null, startedAt: null, finishedAt: null, progress: [], results: [], error: null };
   const streams = new Set();
-  const streamTimer = setInterval(() => { for (const stream of streams) { try { const snapshot = createControlPlaneSnapshot(root); stream.res.write(`event: snapshot\ndata: ${JSON.stringify({ cursor: snapshot.state?.log?.length || 0, snapshot })}\n\n`); } catch { streams.delete(stream); } } }, 2000);
+  // Build the snapshot once per tick and push it to connected streams only when
+  // it actually changed: an idle dashboard then costs one in-process build and
+  // zero wire bytes per tick instead of a full snapshot per client every 2 s.
+  let cachedFrame = null; // { cursor, json } of the latest built snapshot
+  let forceFullNextConnect = false; // set on any content change, even without log growth
+  const streamTimer = setInterval(() => {
+    let frame;
+    try { const snapshot = createControlPlaneSnapshot(root); frame = { cursor: snapshot.state?.log?.length || 0, json: JSON.stringify({ cursor: snapshot.state?.log?.length || 0, snapshot }) }; } catch { return; }
+    if (cachedFrame && cachedFrame.json === frame.json) return;
+    forceFullNextConnect = Boolean(cachedFrame); // a real change; the first cached build is not one
+    cachedFrame = frame;
+    for (const stream of streams) { try { stream.res.write(`event: snapshot\ndata: ${frame.json}\n\n`); } catch { streams.delete(stream); } }
+  }, 2000);
   streamTimer.unref?.();
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", `http://${host}`);
+      if (process.env.ATL_DEBUG_ROUTES) console.error(`[routes] raw=${JSON.stringify(req.url)} pathname=${JSON.stringify(url.pathname)}`);
       if (readOnlyPreview && !["GET", "HEAD", "OPTIONS"].includes(req.method || "GET")) { json(res, 403, { ok: false, error: "Synthetic UI preview is read-only; live task actions are unavailable." }); return; }
       // A browser may only mutate this loopback service from its own origin.
       // Command-line clients have no Origin header and remain supported.
@@ -1261,8 +1274,20 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         recordActionOutcome(root, action, { status: "started" }); json(res, 202, { ok: true, session }); return;
       }
       if (req.method === "GET" && url.pathname === "/api/events") {
-        const snapshot = createControlPlaneSnapshot(root); res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
-        res.write(`event: snapshot\ndata: ${JSON.stringify({ cursor: Number(url.searchParams.get("cursor") || 0), snapshot })}\n\n`);
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+        const cursor = Number(url.searchParams.get("cursor") || 0);
+        // A reconnecting client that already holds the current frame gets a tiny
+        // liveness block; anything else (fresh client, drifted cursor, content
+        // that changed after its last poll) receives the full snapshot.
+        if (cachedFrame && cursor > 0 && !forceFullNextConnect && cursor === cachedFrame.cursor) {
+          res.write(`event: unchanged\ndata: {}\n\n`);
+        } else if (cachedFrame) {
+          res.write(`event: snapshot\ndata: ${cachedFrame.json}\n\n`);
+          forceFullNextConnect = false;
+        } else {
+          const snapshot = createControlPlaneSnapshot(root);
+          res.write(`event: snapshot\ndata: ${JSON.stringify({ cursor: snapshot.state?.log?.length || 0, snapshot })}\n\n`);
+        }
         const stream = { res }; streams.add(stream); req.on("close", () => streams.delete(stream)); return;
       }
       if (req.method === "GET" && url.pathname === "/api/approvals") { json(res, 200, approvalSnapshot(root)); return; }

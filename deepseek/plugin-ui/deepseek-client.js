@@ -40,11 +40,14 @@ var h = import_react.default.createElement;
 var PANEL = "atl-control-plane";
 var inject = ["slots", "layout"];
 var WORKSPACE_KEY = "atl-dsh-workspace";
+var WORKSPACE_LIST_KEY = "atl-dsh-workspaces";
 var livePanel = null;
 function rememberPanel(value) {
   livePanel = { id: value.id, project: value.project };
   try {
     localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ project: value.project }));
+    const known = JSON.parse(localStorage.getItem(WORKSPACE_LIST_KEY) || "[]").filter((entry) => entry && typeof entry === "string" && entry !== value.project);
+    localStorage.setItem(WORKSPACE_LIST_KEY, JSON.stringify([value.project, ...known].slice(0, 5)));
   } catch {
   }
 }
@@ -58,6 +61,14 @@ function recallProject() {
     return value && typeof value.project === "string" && value.project ? value.project : null;
   } catch {
     return null;
+  }
+}
+function recallWorkspaces() {
+  try {
+    const list = JSON.parse(localStorage.getItem(WORKSPACE_LIST_KEY) || "[]");
+    return Array.isArray(list) ? list.filter((entry) => typeof entry === "string" && entry).slice(0, 5) : [];
+  } catch {
+    return [];
   }
 }
 function forgetPanel() {
@@ -82,15 +93,12 @@ function AtlPanel() {
   }
   async function open(event) {
     event.preventDefault();
+    submit(project.trim());
+  }
+  function submit(value) {
     setBusy(true);
     setError("");
-    try {
-      setPanel(await openProject(project.trim()));
-    } catch (failure) {
-      setError(failure.message);
-    } finally {
-      setBusy(false);
-    }
+    openProject(value).then(setPanel).catch((failure) => setError(failure.message)).finally(() => setBusy(false));
   }
   (0, import_react.useEffect)(() => {
     if (restored.current) return;
@@ -117,6 +125,8 @@ function AtlPanel() {
     } }, "Change project")),
     h("iframe", { title: "ATL Control Plane", src: new URL(`api/atl/view?id=${encodeURIComponent(panel.id)}`, document.baseURI).href, style: { border: 0, width: "100%", flex: 1, minHeight: 400 }, allow: "clipboard-write" })
   );
+  const remembered = recallWorkspaces().filter((entry) => entry !== project);
+  const chipStyle = { border: "1px solid currentColor", borderRadius: 999, padding: "5px 12px", color: "inherit", background: "transparent", cursor: "pointer", font: "inherit", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
   return h(
     "section",
     { style: { maxWidth: 680, margin: "48px auto", padding: 24, color: "inherit" } },
@@ -125,6 +135,10 @@ function AtlPanel() {
     h(
       "form",
       { onSubmit: open },
+      remembered.length ? h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 } }, remembered.map((entry) => h("button", { key: entry, type: "button", title: entry, style: chipStyle, disabled: busy, onClick: () => {
+        setProject(entry);
+        submit(entry);
+      } }, entry))) : null,
       h("label", { htmlFor: "atl-project", style: { display: "block", marginBottom: 8 } }, "Project directory"),
       h("input", { id: "atl-project", value: project, onChange: (event) => setProject(event.target.value), placeholder: "C:\\Projects\\my-app", required: true, disabled: busy, style: { width: "100%", padding: 12, border: "1px solid currentColor", borderRadius: 8, background: "transparent", color: "inherit", font: "inherit", marginBottom: 16 } }),
       h("p", { style: { opacity: 0.75 } }, "Opening prepares ATL project state and starts no workers. Your workspace reopens automatically; register other repositories on the Projects page."),

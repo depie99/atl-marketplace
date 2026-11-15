@@ -67,5 +67,13 @@ export async function frameBootstrap({ id, theme }) {
     const observer = new MutationObserver(syncTheme);
     observer.observe(parent.document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
     addEventListener('pagehide', () => observer.disconnect(), { once: true });
-  } catch (error) { document.body.textContent = `ATL could not open: ${error.message}. Reopen the project from the ATL panel to reconnect.`; }
+  } catch (error) {
+    document.body.textContent = "";
+    const box = document.createElement("div");
+    let light = false;
+    try { light = parent.document.documentElement.classList.contains("light") || parent.document.documentElement.dataset.theme === "light"; } catch { /* parent unreachable: keep dark */ }
+    box.style.cssText = `min-height:100vh;box-sizing:border-box;padding:28px;font:14px/1.7 system-ui,sans-serif;background:${light ? "#ffffff" : "#151517"};color:${light ? "#1a1a1a" : "#e6e6e6"};`;
+    box.textContent = `ATL could not open: ${error.message}. Reopen the project from the ATL panel to reconnect.`;
+    document.body.append(box);
+  }
 }

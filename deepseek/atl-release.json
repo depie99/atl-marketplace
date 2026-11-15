@@ -1,9 +1,9 @@
 {
   "format": 3,
-  "version": "0.6.12",
+  "version": "0.6.13",
   "runtimeVersion": "0.2.0",
   "content": {
-    "sha256": "b2d8a116f7f35484e6e0ee1837d37ef74f82bfae24f85d553b1939a0640bc95f",
+    "sha256": "17afc9d8cd2c57b6bbb3898e08fa24a420486864844cb2c1d61368b827c8086f",
     "files": {
       "runtime/README.md": "a9d922fccd188cd48171c12d013f6724aab8ba59dd154255f9b7f5bb72d0d237",
       "runtime/assets/atl-logo.svg": "1c12870ee9b3e90ea07dde99510d498c841d7a97c760d588a2a616237de13861",
@@ -19,7 +19,7 @@
       "runtime/connect.html": "bb34b59a8e9285124cf6c1eec79851fa70c0a34f1a9001b872176422e6c41f2d",
       "runtime/connect.js": "43a2d8c8660a3dbcf05e99b2ffe29ea099de098c9dd32b7ea29217821cb39a26",
       "runtime/control-plane-changes.js": "718c4ec4bd7732a295fcd61f8fa7161d8c8cfdacf37c60efc880381b4f25009f",
-      "runtime/control-plane-client.js": "06803a09dff124183089b813792ac23f7153ca77b0b22a1ee0fcab802f63dcdc",
+      "runtime/control-plane-client.js": "4f370a9227a79540babf78353f6f8ba40135ee62a5957d42eeeb46bd31e108f7",
       "runtime/control-plane-i18n.js": "8b9054cdf6b37738e29b5c61298dd8e69a4be501bf65d84ce2d2210c67257237",
       "runtime/control-plane-my-tasks.js": "4891b7a2f9f11712d2e4c4f10a51aa9917af2cceae85dac53a5cfefb08009d37",
       "runtime/control-plane.html": "6719aeea85f982611ad30ae8470d17d9543b9778b4a6757bf817565051ad7f99",
@@ -35,7 +35,7 @@
       "runtime/lib/command-console.mjs": "bef6a5d958c90b4f98ad476d7c2e56b3231e82de5693a80944f6459e89aeb2fc",
       "runtime/lib/composer.mjs": "ecfd02f220300363b5cd1467ea97ab7c7baec1a7c5a76c26f1ec8ff809f439bc",
       "runtime/lib/control-assistant.mjs": "3b97546a212ac0020a63e8341ebb071f5e41ec088394d6165f3c461740b44e95",
-      "runtime/lib/control-plane-server.mjs": "1f06e4b966ffb5cfc73c4dc74b6078cbf3b3bdb5955a3b0e448049ff0defcdc9",
+      "runtime/lib/control-plane-server.mjs": "fca388cd9518d77a22d2f54ae393037ffdea98ff666a55956a080f474fe722a2",
       "runtime/lib/control-plane.mjs": "8a85cb6b2ddafa0f45893539e389d2a327b8da68fe32452a2cd256ac81f2279b",
       "runtime/lib/dashboard.mjs": "943b4292c289facbbf1fab797f99d326916cc1651782a3eecaf7fc6b81b6cda4",
       "runtime/lib/delivery.mjs": "c828fe433a5af1a05465ea0399dbca32855dc417e62438b2475c73897aa2e76d",
@@ -103,7 +103,7 @@
       "runtime/lib/ui-review-preview.mjs": "5581b11116d9e4daadd918acb5af9868a3b6923509c04565d3c81e97af4e7305",
       "runtime/lib/ui-review-runtime.mjs": "6473f859626af786492d47636b2fad74079b11f522cb39718f8c2719294f8b82",
       "runtime/lib/usage.mjs": "12e89fd405c1f8920c22c7d385cd922de44fdca6a2c22f75f4a77e3ff0bbb2ab",
-      "runtime/lib/userProviders.mjs": "04172d86f84ff747ae2294e46d1534bb6d6b51b7de2345773dbb69dc05ba8b37",
+      "runtime/lib/userProviders.mjs": "c524983dfdb81a902ba2c94f9d726adb94b5dcdff82dc573d057c7605691229c",
       "runtime/lib/visual-pr.mjs": "d4ccf1e287eaca086e72f54b199ed21bcfcf19f0f9699ddaa2dfa730ae26ab09",
       "runtime/lib/worker-channel-client.mjs": "e0f872f45eef0c93d7d2a35c963005a7784ce7e101e4f54853c8029a1d9d5e79",
       "runtime/lib/worker-channel.mjs": "a50c16fb864b9a7621d84d412ac3c8b7dd6e6cc2aff1ab7f96f15842a7ae4e8d",
@@ -358,7 +358,7 @@
       "verification/control_room_test.mjs": "a32ff578b7e134850f44a5aedcda9f93a4609b1befa1d352925d3cfae1c43699",
       "verification/control_room_ui_test.mjs": "65da7442cad283b34a723379e7c72ac5ef4311b5a59791e7c11e32eae20a7cc1",
       "verification/dashboard_test.mjs": "b17402c3b60982cd16de4634ef8df7af81b76f5ad9688bb0f813fcd54b369bf9",
-      "verification/deepseek_panel_test.mjs": "d6928c0a8b5aaf43179278cfa2dc95f8d8fa3b33e6c444dd71b536a9f5af030e",
+      "verification/deepseek_panel_test.mjs": "a22c021a5928690b6353b1015d10c9c78621abf52645b55b28433efa7afac959",
       "verification/deepseek_recovery_test.mjs": "8eee98d72549ceb2658c924f69fb736fd43cda503c3327db39a2819e0b820fcb",
       "verification/dependencies_model.py": "737a8342283e7233ca008fd20aba6b6cf87dd5df4233f5cc9caca24ce4b6f230",
       "verification/developer_delivery_contract_test.mjs": "2d79595634683003a276f4adfcf9a2bd4f7c6ea7bdad6480c87cb105e8a9e3ab",
@@ -460,6 +460,7 @@
       "verification/project_workmap_ui_test.mjs": "a9f7cec490e08e767515a5a8eec6002c1a0001843753ada09356ca01bebd711b",
       "verification/provider_quota_failover_test.mjs": "616cfe80663077f7e4799d73c85cb9d2e00daa22a080a134e3fdfff1f48c9804",
       "verification/provider_registry_test.mjs": "31de139d0d6299f4932cdf4fe76ddcc7a93bd0841b6d80ba15a539a8c197c8b9",
+      "verification/providers_home_test.mjs": "78cc45061e443952bbb079a42e1a6d07e96be9cb0e463ddcaa83bd9684fb5aca",
       "verification/queue_recovery_delivery_test.mjs": "39782292dd4c328ac4dc034e447051355a396f6dc8e522219502052637c3342a",
       "verification/record_mock_regression_lessons.mjs": "b6aa13257e57e798191c1c0d698fada4d038cc76d77193b0e8b3e1b7cf4ead05",
       "verification/recovery_test.mjs": "2e9f5be0e9472ad49e91affb961815eed657309e44bd45e547604e55933923a0",
@@ -474,6 +475,7 @@
       "verification/run_mock_regression.mjs": "d3138ab2becb4d05993dd987a99fa27c0105a1058f8e2b395bc43b96a62a3c5c",
       "verification/session_auth_test.mjs": "4ce4120cddf6f97145eafe021aed2784d7242147e160bf93ae0eb21079e576f3",
       "verification/skill_install_test.mjs": "e019cfb74660cb1e5337da443f114d31260c5387a92516f8f0558f625459db4b",
+      "verification/snapshot_delta_test.mjs": "22d314f214c9e082b9acf0c8f602f9da2f178a5a2e7cc40626dc07ba95fb6a59",
       "verification/supervisor_runner_test.mjs": "2bdeb3aee0ead82de430b3be57935d05256f2558d495be0904210612a58e5421",
       "verification/supervisor_test.mjs": "9b0a7e900bc2ef18a0f95b1372dda46c2de45b98d2656ec55d7946e7a801b341",
       "verification/sync_skills_test.mjs": "f8a4b0431f6810db752cfe1d05b9e059c0d8558ad35f9908ec47cd3ccd3b957c",
@@ -501,8 +503,8 @@
       "verification/worker_windows_timeout_test.mjs": "57adb0abd9bbf7d0697054f7fabf42e5dfbd9992a77a2798280be1fa37078992",
       "verification/workspace_test.mjs": "2e346088d444f6cdcffedba5b6f259e98c56a0a2fb2ede922e9f27b7da7d23bb",
       "plugins/README.md": "e80f8390429daa18b88652b57927f5e2151e64e6f69acda237784509d02e34ea",
-      "plugins/deepseek-client.mjs": "7e5936ee06e52ebf8f7f7c30e327e01e5699811e718fb3058ace777e8747482c",
-      "plugins/deepseek-frame.mjs": "3430207e952a564f4c5392d76d2a3a119eaedd82a80271a0a5d0c87c738fb2c9",
+      "plugins/deepseek-client.mjs": "faf7de20cdc7cd39a0248c627ab78b4cc1e8e9a4c97cb22f5a70e33385e2655e",
+      "plugins/deepseek-frame.mjs": "883899fd69484e26de33ce5200f38e52a7fadfa4634734e7d3e2b255d667b704",
       "plugins/deepseek-panel.mjs": "3b495202a774a70c284d0aae385eac3038d45fbcc0864b8c67788c850f46ae7b",
       "plugins/deepseek.mjs": "486bb2e8146ee807a9eeb134c81e3fb7150878da617146f01ed7de734f81408a",
       "plugins/panel-entry.mjs": "bc93b7d9dae30f81d4f7a0b5bf8012a55ac60be618a8fa082a0f85a6bd08ec72",
@@ -519,7 +521,7 @@
     "sha256": "ae65fac5926f19a3f0120cae84adf7e670ea70a98ed7240d3ba3d27cb5ef65bb",
     "deepseek": {
       "path": "plugin-ui/deepseek-client.js",
-      "sha256": "1ceb5b5c7308386f120b94be907b3fa1d4d561c6151d0038eeb4e88de8dd2fc9"
+      "sha256": "395d7a0afa70a77c4c4b3ab52883f3cee0d28e460e5454f3a926aa46a77a379e"
     }
   }
 }

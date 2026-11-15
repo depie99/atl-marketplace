@@ -1842,7 +1842,23 @@ ${provider.ready ? "" : `<div class="muted tiny" style="margin-top:4px">${escape
     const imported = ["azure", "github", "jira"].includes(task?.source?.type);
     const assignedRepo = task?.repository_id || "";
     const assignmentField = imported ? `<div class="field"><span class="label">Repository assignment</span><p class="sub">Imported requests can affect several repositories. Use Repositories in Sources to link all affected repos.</p></div>` : `<div class="field"><label class="label" for="fRepository">Assign to repository <span class="muted">(optional)</span></label><select class="input" id="fRepository" ${task?.plan_draft_id ? "disabled" : ""}><option value="">This workspace / no repository</option>${(snapshot.supervisor?.projects || []).map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === assignedRepo ? "selected" : ""}>${escapeHtml(project.name)} — ${escapeHtml(project.root)}</option>`).join("")}</select>${task?.plan_draft_id ? '<small class="muted">Plan-created tasks stay bound to their approved repository.</small>' : '<small class="muted">The task will run in a worktree from this repository. This does not start execution.</small>'}</div>`;
-    popup(task ? `Edit ${escapeHtml(task.id)}` : "New ATL task", `<div class="field"><label class="label">Task title</label><input class="input" id="fTitle" value="${escapeHtml(task?.title || "")}" placeholder="Describe the task"></div><div class="field"><label class="label">Objective and acceptance criteria</label><textarea class="input" id="fDesc">${escapeHtml(task?.desc || "")}</textarea></div>${assignmentField}<div class="grid two"><div class="field"><label class="label">Queue</label><select class="input" id="fQueue"><option value="">Unqueued</option>${queues.map((queue) => `<option ${queue.id === defaultQueue ? "selected" : ""} value="${escapeHtml(queue.id)}">${escapeHtml(queue.label)}</option>`).join("")}</select></div><div class="field"><label class="label">Priority</label><select class="input" id="fPriority">${[["low", "Low"], ["normal", "Normal"], ["high", "High"], ["urgent", "Urgent"]].map((row) => `<option value="${row[0]}" ${row[1] === task?.priority ? "selected" : ""}>${row[1]}</option>`).join("")}</select></div></div><p class="sub">New tasks are added to the active queue by default. Queue membership does not start execution.</p>`, btn("Cancel", "close") + btn(task ? "Save task" : "Create task", `save:${task?.id || ""}`, "primary")); $("#fTitle")?.focus(); }
+    popup(task ? `Edit ${escapeHtml(task.id)}` : "New ATL task", `<div class="field"><label class="label">Task title</label><input class="input" id="fTitle" value="${escapeHtml(task?.title || "")}" placeholder="Describe the task"></div><div class="field"><label class="label">Objective and acceptance criteria</label><textarea class="input" id="fDesc">${escapeHtml(task?.desc || "")}</textarea></div>${assignmentField}<div class="grid two"><div class="field"><label class="label">Queue</label><select class="input" id="fQueue"><option value="">Unqueued</option>${queues.map((queue) => `<option ${queue.id === defaultQueue ? "selected" : ""} value="${escapeHtml(queue.id)}">${escapeHtml(queue.label)}</option>`).join("")}</select></div><div class="field"><label class="label">Priority</label><select class="input" id="fPriority">${[["low", "Low"], ["normal", "Normal"], ["high", "High"], ["urgent", "Urgent"]].map((row) => `<option value="${row[0]}" ${row[1] === task?.priority ? "selected" : ""}>${row[1]}</option>`).join("")}</select></div></div><p class="sub">New tasks are added to the active queue by default. Queue membership does not start execution.</p>`, btn("Cancel", "close") + btn(task ? "Save task" : "Create task", `save:${task?.id || ""}`, "primary"));
+    if (!task) {
+      // An unsubmitted draft survives panel reloads and harness tab switches via
+      // session storage; it is restored whenever the blank form opens again.
+      try {
+        const draft = JSON.parse(sessionStorage.getItem("atl-task-draft") || "null");
+        if (draft && typeof draft === "object") {
+          if (draft.title) $("#fTitle").value = draft.title;
+          if (draft.desc) $("#fDesc").value = draft.desc;
+          if (draft.queue) $("#fQueue").value = draft.queue;
+          if (draft.priority) $("#fPriority").value = draft.priority;
+        }
+      } catch { /* corrupted draft is ignored */ }
+      const persistDraft = () => { try { sessionStorage.setItem("atl-task-draft", JSON.stringify({ title: $("#fTitle")?.value || "", desc: $("#fDesc")?.value || "", queue: $("#fQueue")?.value || "", priority: $("#fPriority")?.value || "" })); } catch { /* private browsing */ } };
+      for (const field of ["fTitle", "fDesc", "fQueue", "fPriority"]) $("#" + field)?.addEventListener("input", persistDraft);
+    }
+    $("#fTitle")?.focus(); }
   function taskDetail(task) {
     const body = taskDetailBody(task, null);
     (typeof popupWide === "function" ? popupWide : popup)(`${escapeHtml(task.id)} / Task details`, body, btn("Ask ATL", `assistant-open:${task.id}`, "primary") + (globalThis.ATL_CHANGE_REVIEW ? btn("Review changes", `task-changes:${task.id}`) : "") + btn("Actions", `task-actions:${task.id}`), "task-detail-dialog");
@@ -3217,6 +3233,7 @@ ${provider.ready ? "" : `<div class="muted tiny" style="margin-top:4px">${escape
     const priority = $("#fPriority")?.value || "normal";
     const queueId = $("#fQueue")?.value;
     const repositoryId = $("#fRepository")?.value || null;
+    if (!id) try { sessionStorage.removeItem("atl-task-draft"); } catch { /* private browsing */ }
     try {
       let taskId = id;
       if (taskId) {

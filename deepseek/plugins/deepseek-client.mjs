@@ -4,6 +4,7 @@ const PANEL = 'atl-control-plane';
 export const inject = ['slots', 'layout'];
 
 const WORKSPACE_KEY = 'atl-dsh-workspace';
+const WORKSPACE_LIST_KEY = 'atl-dsh-workspaces';
 // dsh unmounts the keyed main slot on every tab switch and remounts it on return,
 // but this client module and its plugin fiber stay loaded. Keeping the open panel
 // at module scope (plus a durable copy for fresh page loads) is what makes the
@@ -12,12 +13,19 @@ let livePanel = null;
 
 function rememberPanel(value) {
   livePanel = { id: value.id, project: value.project };
-  try { localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ project: value.project })); } catch { /* storage unavailable: session memory still holds the workspace */ }
+  try {
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ project: value.project }));
+    const known = JSON.parse(localStorage.getItem(WORKSPACE_LIST_KEY) || '[]').filter(entry => entry && typeof entry === 'string' && entry !== value.project);
+    localStorage.setItem(WORKSPACE_LIST_KEY, JSON.stringify([value.project, ...known].slice(0, 5)));
+  } catch { /* storage unavailable: session memory still holds the workspace */ }
 }
 function recallPanel() { return livePanel; }
 function recallProject() {
   if (livePanel) return livePanel.project;
   try { const value = JSON.parse(localStorage.getItem(WORKSPACE_KEY) || 'null'); return value && typeof value.project === 'string' && value.project ? value.project : null; } catch { return null; }
+}
+function recallWorkspaces() {
+  try { const list = JSON.parse(localStorage.getItem(WORKSPACE_LIST_KEY) || '[]'); return Array.isArray(list) ? list.filter(entry => typeof entry === 'string' && entry).slice(0, 5) : []; } catch { return []; }
 }
 function forgetPanel() {
   livePanel = null;
@@ -40,9 +48,11 @@ export function AtlPanel() {
   }
   async function open(event) {
     event.preventDefault();
+    submit(project.trim());
+  }
+  function submit(value) {
     setBusy(true); setError('');
-    try { setPanel(await openProject(project.trim())); }
-    catch (failure) { setError(failure.message); } finally { setBusy(false); }
+    openProject(value).then(setPanel).catch(failure => setError(failure.message)).finally(() => setBusy(false));
   }
   useEffect(() => {
     // Automatic workspace opening: restore the remembered workspace on mount. The
@@ -60,10 +70,13 @@ export function AtlPanel() {
   if (panel) return h('section', { style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 } },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', flexShrink: 0 } }, h('strong', null, 'ATL'), h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }, title: panel.project }, panel.project), h('button', { type: 'button', style: buttonStyle, onClick: () => { forgetPanel(); setPanel(null); setProject(''); setError(''); } }, 'Change project')),
     h('iframe', { title: 'ATL Control Plane', src: new URL(`api/atl/view?id=${encodeURIComponent(panel.id)}`, document.baseURI).href, style: { border: 0, width: '100%', flex: 1, minHeight: 400 }, allow: 'clipboard-write' }));
+  const remembered = recallWorkspaces().filter(entry => entry !== project);
+  const chipStyle = { border: '1px solid currentColor', borderRadius: 999, padding: '5px 12px', color: 'inherit', background: 'transparent', cursor: 'pointer', font: 'inherit', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   return h('section', { style: { maxWidth: 680, margin: '48px auto', padding: 24, color: 'inherit' } },
     h('h1', null, 'ATL Control Plane'),
     h('p', null, 'Plan work, review tasks and manage runs inside DeepSeek Harness.'),
     h('form', { onSubmit: open },
+      remembered.length ? h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 } }, remembered.map(entry => h('button', { key: entry, type: 'button', title: entry, style: chipStyle, disabled: busy, onClick: () => { setProject(entry); submit(entry); } }, entry))) : null,
       h('label', { htmlFor: 'atl-project', style: { display: 'block', marginBottom: 8 } }, 'Project directory'),
       h('input', { id: 'atl-project', value: project, onChange: event => setProject(event.target.value), placeholder: 'C:\\Projects\\my-app', required: true, disabled: busy, style: { width: '100%', padding: 12, border: '1px solid currentColor', borderRadius: 8, background: 'transparent', color: 'inherit', font: 'inherit', marginBottom: 16 } }),
       h('p', { style: { opacity: 0.75 } }, 'Opening prepares ATL project state and starts no workers. Your workspace reopens automatically; register other repositories on the Projects page.'),

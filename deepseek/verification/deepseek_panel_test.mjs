@@ -84,7 +84,10 @@ try {
   await page.evaluate(() => window.rerenderMain());
   await page.waitForTimeout(300);
   assert.equal(await page.locator('#atl-project').count(), 0, 'panel must survive component remount without showing the project form');
-  await frame.locator('#mobile [data-page="tasks"]').waitFor({ timeout: 30000 });
+  // The workspace comes back on the page the user left (Plan Studio) — page-level
+  // persistence — then Tasks shows the persisted task again.
+  await frame.locator('#goal').waitFor({ timeout: 30000 });
+  await frame.locator('#mobile [data-page="tasks"]').click();
   await frame.getByText('Created inside DeepSeek panel', { exact: true }).first().waitFor();
 
   // Fresh page (reload-like): the workspace auto-opens from persisted memory.
@@ -96,13 +99,31 @@ try {
   await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#mobile [data-page="tasks"]').waitFor({ timeout: 30000 });
   await page2.frameLocator('iframe[title="ATL Control Plane"]').getByText('Created inside DeepSeek panel', { exact: true }).first().waitFor();
   assert.deepEqual(errors2, []);
+
+  // Draft survival: an unsubmitted new-task draft survives a remount + reopen.
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#newBtn').click();
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#fTitle').fill('Unsubmitted draft probe');
+  await page2.evaluate(() => window.rerenderMain());
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#mobile [data-page="tasks"]').waitFor({ timeout: 30000 });
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#newBtn').click();
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#fTitle').waitFor({ timeout: 15000 });
+  assert.equal(await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#fTitle').inputValue(), 'Unsubmitted draft probe', 'unsubmitted draft must survive a remount');
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').getByRole('button', { name: 'Cancel', exact: true }).first().click().catch(() => {});
+
+  // Remembered-workspace chips: Change project offers prior workspaces as one-click chips.
+  await page2.getByRole('button', { name: 'Change project' }).click();
+  await page2.waitForTimeout(500);
+  const chip = page2.locator('form button', { hasText: 'atl-deepseek-panel' }).first();
+  assert.ok(await chip.count(), 'remembered workspace chip must be offered on the project form');
+  await chip.click();
+  await page2.frameLocator('iframe[title="ATL Control Plane"]').locator('#mobile [data-page="tasks"]').waitFor({ timeout: 30000 });
   await page2.close();
   const cookie = 'fixture_owner=1';
   const unknown = await fetch(url + '/api/atl/request', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'missing', path: '/api/snapshot' }) });
   assert.equal(unknown.status, 400);
   const external = await fetch(url + '/api/atl/request', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'missing', path: 'https://example.com/' }) });
   assert.equal(external.status, 400);
-  console.log('PASS: shipped DeepSeek factory, plugin Open action, embedded ATL, Plan Studio, task persistence, theme sync, 480/1280px, expired panel and external-path rejection (DSH contract fixture)');
+  console.log('PASS: shipped DeepSeek factory, plugin Open action, embedded ATL, Plan Studio, task persistence, theme sync, 480/1280px, remount persistence (no form, page restore, auto-reopen on fresh page), expired panel and external-path rejection (DSH contract fixture)');
 } finally {
   await browser?.close();
   for (const close of cleanups.reverse()) await close();
