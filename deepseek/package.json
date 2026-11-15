@@ -1,6 +1,6 @@
 {
   "name": "@depie99/atl-plugin",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "description": "Full ATL: engineering skills, workflows, persistent tasks, bounded execution and the local Control Plane.",
   "type": "module",
   "license": "MIT",
@@ -28,7 +28,8 @@
     "README.fa.md",
     "GUIDE.md",
     "USAGE.md",
-    "LICENSE"
+    "LICENSE",
+    "EMBEDDED-UI.md"
   ],
   "bin": {
     "atl": "runtime/atl-manager.mjs",
@@ -38,11 +39,21 @@
   "bundledDependencies": [],
   "main": "./plugins/deepseek.mjs",
   "exports": {
-    ".": "./plugins/deepseek.mjs"
+    ".": "./plugins/deepseek.mjs",
+    "./client": "./plugin-ui/deepseek-client.js"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
     }
   }
 }

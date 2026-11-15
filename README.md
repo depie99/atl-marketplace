@@ -17,7 +17,7 @@ each supported harness — no build step required on your side.
 | [`deepseek/`](deepseek/) | DeepSeek Harness (`dsh`) |
 | [`universal/`](universal/) | Any harness with local MCP tools |
 
-Current release: **0.6.10** (see [`zcode/.zcode-plugin/plugin.json`](zcode/.zcode-plugin/plugin.json)).
+DeepSeek release: **0.6.11**, with an embedded Control Plane. Other harness bundles: **0.6.10**.
 
 Project home and documentation: [depie99/Agent-Trust-Ladder](https://github.com/depie99/Agent-Trust-Ladder)
 · [Docs site](https://depie99.github.io/Agent-Trust-Ladder/)
@@ -46,8 +46,19 @@ other sessions can open the bundled browser UI.
 `dsh plugin` forwards to pnpm, so install straight from this repository:
 
 ```sh
-dsh plugin add github:depie99/atl-marketplace#path:deepseek
+dsh plugin --profile web add "github:depie99/atl-marketplace#path:deepseek"
 ```
+
+Restart or reload DeepSeek after upgrading. Select **ATL** in the sidebar, or open
+**Plugins → @depie99/atl-plugin → Open Control Plane**. Enter the absolute project
+directory on the machine running DeepSeek. The complete ATL interface opens inside
+the harness, including Tasks and Plan Studio. Opening prepares project state and
+starts no workers. The panel requires the authenticated owner connection.
+
+Use the package specification above in DeepSeek's Add plugin dialog. The repository
+root is a marketplace catalog for other harnesses; the DeepSeek package lives in
+`deepseek/`. If an earlier attempt left an unresolved `atl-marketplace` bundle, remove
+that entry with `dsh plugin --profile web remove atl-marketplace`, then install again.
 
 ### Codex CLI, Cursor, Gemini CLI
 

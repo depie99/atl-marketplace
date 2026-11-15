@@ -5896,19 +5896,60 @@ html[data-atl-context=plugin] .mobile {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 0;
-  margin: 0 0 14px;
+  padding: 8px 16px;
+  margin: 0;
   border-bottom: 1px solid var(--border);
+  background: var(--mobile-bg);
 }
 
 html[data-atl-context=plugin] .mobile .btn {
+  display: inline-flex;
+  align-items: center;
   min-height: 40px;
-  min-width: 64px;
+  min-width: 0;
   justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  font-size: 12px;
 }
 
-html[data-atl-context=plugin] .mobile .btn {
-  gap: 5px;
+html[data-atl-context=plugin] .mobile .btn > [aria-hidden=true] {
+  display: inline-flex;
+  flex: none;
+}
+
+html[data-atl-context=plugin] .mobile .btn svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+html[data-atl-context=plugin] {
+  color-scheme: dark;
+}
+
+html[data-atl-context=plugin].light {
+  color-scheme: light;
+}
+
+html[data-atl-context=plugin] input[type=file]::file-selector-button {
+  margin-inline-end: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--btn-edge);
+  border-radius: 6px;
+  background: var(--btn-bg);
+  color: var(--btn-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+html[data-atl-context=plugin] input[type=file]::file-selector-button:hover {
+  background: var(--btn-bg-hover);
 }
 
 html[data-atl-context=plugin] .tasks-search-row > [data-action=tasks-select-visible] {
@@ -5944,8 +5985,8 @@ html[data-atl-context=plugin] .task-row:focus-visible {
     gap: 2px 4px;
     font-size: 11px;
   }
-  html[data-atl-context=plugin] .mobile .btn > [aria-hidden=true] {
-    display: none;
+  html[data-atl-context=plugin] .mobile .btn {
+    flex-direction: column;
   }
   html[data-atl-context=plugin] body {
     padding-bottom: 72px;
