@@ -1979,15 +1979,19 @@ ${provider.ready ? "" : `<div class="muted tiny" style="margin-top:4px">${escape
     refreshTaskDetail();
     if (renderAfter && page === "queues") render();
   }
+  let frameCursor = 0;
+  let lastRefreshOk = 0;
   async function refresh(renderAfter = true) {
-    try { const response = await fetch("/api/snapshot", { cache: "no-store" }); if (!response.ok) throw new Error(`snapshot ${response.status}`); snapshot = await response.json(); connected = true; }
+    // The poll echoes the frame version it holds: an unchanged workspace costs a
+    // tiny response instead of a full snapshot re-download every cycle.
+    try { const response = await fetch(`/api/snapshot?cursor=${frameCursor}`, { cache: "no-store" }); if (!response.ok) throw new Error(`snapshot ${response.status}`); const payload = await response.json(); if (payload.unchanged) { lastRefreshOk = Date.now(); connected = true; return; } snapshot = payload; frameCursor = payload.cursor || 0; lastRefreshOk = Date.now(); connected = true; }
     catch { connected = false; }
     refreshTaskDetail();
     const editing = dialogOpen || cardDraft || page === "sources" || document.activeElement?.matches("input, textarea, select");
     if (renderAfter && !editing) render();
   }
   function connectStream() { if (stream) stream.close(); stream = new EventSource(`/api/events?cursor=${streamCursor}`); stream.addEventListener("snapshot", (event) => { try { const payload = JSON.parse(event.data); streamCursor = payload.cursor || streamCursor; snapshot = payload.snapshot || snapshot; connected = true; streamRetry = 1000; if (page !== "sources" && !dialogOpen && !cardDraft && !document.activeElement?.matches("input,textarea,select")) render(); } catch {} }); stream.onerror = () => { connected = false; stream.close(); setTimeout(connectStream, streamRetry); streamRetry = Math.min(streamRetry * 2, 15000); if (page !== "sources") render(); }; }
-  setInterval(() => { if (connected && snapshot.captured_at && Date.now() - new Date(snapshot.captured_at).getTime() > 10000) { connected = false; if (page !== "sources") render(); } }, 1000);
+  setInterval(() => { if (connected && lastRefreshOk && Date.now() - lastRefreshOk > 10000) { connected = false; if (page !== "sources") render(); } }, 1000);
   async function refreshProviderUsage() {
     usageNotice = "Refreshing configured provider telemetry…";
     render();

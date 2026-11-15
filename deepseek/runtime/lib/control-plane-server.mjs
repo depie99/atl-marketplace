@@ -1199,7 +1199,14 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         sendJavascript(res, assetRoot, "control-plane-changes.js"); return;
       }
       if (req.method === "GET" && url.pathname === "/api/snapshot") {
-        json(res, 200, createControlPlaneSnapshot(root));
+        const cursor = Number(url.searchParams.get("cursor") || 0);
+        if (cachedFrame && !forceFullNextConnect && cursor > 0 && cursor === cachedFrame.cursor) {
+          json(res, 200, { unchanged: true, cursor });
+        } else {
+          const payload = cachedFrame ? JSON.parse(cachedFrame.json).snapshot : createControlPlaneSnapshot(root);
+          json(res, 200, { ...payload, cursor: cachedFrame?.cursor ?? 1 });
+          forceFullNextConnect = false;
+        }
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/memory") {

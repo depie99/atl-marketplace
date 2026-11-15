@@ -3,7 +3,7 @@
   "version": "0.6.14",
   "runtimeVersion": "0.2.0",
   "content": {
-    "sha256": "9f347600c74b364128451f71dd49d28fb15e72b6b14fb124553176e009e9f685",
+    "sha256": "2b0edb2e529e73300e8f431bcb3c362eb9facef41de9963b96e8dd004ae805ca",
     "files": {
       "runtime/README.md": "a9d922fccd188cd48171c12d013f6724aab8ba59dd154255f9b7f5bb72d0d237",
       "runtime/assets/atl-logo.svg": "1c12870ee9b3e90ea07dde99510d498c841d7a97c760d588a2a616237de13861",
@@ -19,7 +19,7 @@
       "runtime/connect.html": "bb34b59a8e9285124cf6c1eec79851fa70c0a34f1a9001b872176422e6c41f2d",
       "runtime/connect.js": "43a2d8c8660a3dbcf05e99b2ffe29ea099de098c9dd32b7ea29217821cb39a26",
       "runtime/control-plane-changes.js": "718c4ec4bd7732a295fcd61f8fa7161d8c8cfdacf37c60efc880381b4f25009f",
-      "runtime/control-plane-client.js": "4f370a9227a79540babf78353f6f8ba40135ee62a5957d42eeeb46bd31e108f7",
+      "runtime/control-plane-client.js": "b557306a172dadd67c918b3d86c0bba7f1b3608ee75333c5621636f2cc6a1daa",
       "runtime/control-plane-i18n.js": "8b9054cdf6b37738e29b5c61298dd8e69a4be501bf65d84ce2d2210c67257237",
       "runtime/control-plane-my-tasks.js": "4891b7a2f9f11712d2e4c4f10a51aa9917af2cceae85dac53a5cfefb08009d37",
       "runtime/control-plane.html": "6719aeea85f982611ad30ae8470d17d9543b9778b4a6757bf817565051ad7f99",
@@ -35,7 +35,7 @@
       "runtime/lib/command-console.mjs": "bef6a5d958c90b4f98ad476d7c2e56b3231e82de5693a80944f6459e89aeb2fc",
       "runtime/lib/composer.mjs": "ecfd02f220300363b5cd1467ea97ab7c7baec1a7c5a76c26f1ec8ff809f439bc",
       "runtime/lib/control-assistant.mjs": "3b97546a212ac0020a63e8341ebb071f5e41ec088394d6165f3c461740b44e95",
-      "runtime/lib/control-plane-server.mjs": "6ba829f10090ca7eb1caf97c5bd6110a7f6e0caac4198c1f60c6dc2df213f64c",
+      "runtime/lib/control-plane-server.mjs": "948d3557c418587c262557c25b536ffe5b4cb6fc9572e10b6699b35ac14b073b",
       "runtime/lib/control-plane.mjs": "8a85cb6b2ddafa0f45893539e389d2a327b8da68fe32452a2cd256ac81f2279b",
       "runtime/lib/dashboard.mjs": "943b4292c289facbbf1fab797f99d326916cc1651782a3eecaf7fc6b81b6cda4",
       "runtime/lib/delivery.mjs": "c828fe433a5af1a05465ea0399dbca32855dc417e62438b2475c73897aa2e76d",
