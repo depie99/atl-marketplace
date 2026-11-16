@@ -83,6 +83,7 @@ function AtlPanel() {
   const [panel, setPanel] = (0, import_react.useState)(recallPanel());
   const [busy, setBusy] = (0, import_react.useState)(false);
   const [error, setError] = (0, import_react.useState)("");
+  const [auto, setAuto] = (0, import_react.useState)(true);
   const restored = (0, import_react.useRef)(false);
   async function openProject(value) {
     const response = await fetch(new URL("api/atl/open", document.baseURI), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: value }) });
@@ -93,6 +94,7 @@ function AtlPanel() {
   }
   async function open(event) {
     event.preventDefault();
+    setAuto(false);
     submit(project.trim());
   }
   function submit(value) {
@@ -104,14 +106,16 @@ function AtlPanel() {
     if (restored.current) return;
     restored.current = true;
     const stored = recallProject();
-    if (!stored) return;
     const attachedId = recallPanel()?.id ?? null;
     setBusy(true);
-    openProject(stored).then((result) => {
+    openProject(stored || "").then((result) => {
       if (result.id !== attachedId) setPanel(result);
-    }).catch(() => {
-      if (!recallPanel()) setError(`Could not reopen "${stored}". Enter the directory again.`);
-    }).finally(() => setBusy(false));
+    }).catch((failure) => {
+      if (!recallPanel()) setError(failure.message);
+    }).finally(() => {
+      setBusy(false);
+      setAuto(false);
+    });
   }, []);
   const buttonStyle = { border: "1px solid currentColor", borderRadius: 8, padding: "8px 14px", color: "inherit", background: "transparent", cursor: "pointer" };
   if (panel) return h(
@@ -127,6 +131,12 @@ function AtlPanel() {
   );
   const remembered = recallWorkspaces().filter((entry) => entry !== project);
   const chipStyle = { border: "1px solid currentColor", borderRadius: 999, padding: "5px 12px", color: "inherit", background: "transparent", cursor: "pointer", font: "inherit", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+  if (auto && !error) return h(
+    "section",
+    { style: { maxWidth: 680, margin: "48px auto", padding: 24, color: "inherit" } },
+    h("h1", null, "ATL Control Plane"),
+    h("p", { style: { opacity: 0.75 } }, "Opening your ATL workspace\u2026")
+  );
   return h(
     "section",
     { style: { maxWidth: 680, margin: "48px auto", padding: 24, color: "inherit" } },
@@ -141,7 +151,7 @@ function AtlPanel() {
       } }, entry))) : null,
       h("label", { htmlFor: "atl-project", style: { display: "block", marginBottom: 8 } }, "Project directory"),
       h("input", { id: "atl-project", value: project, onChange: (event) => setProject(event.target.value), placeholder: "C:\\Projects\\my-app", required: true, disabled: busy, style: { width: "100%", padding: 12, border: "1px solid currentColor", borderRadius: 8, background: "transparent", color: "inherit", font: "inherit", marginBottom: 16 } }),
-      h("p", { style: { opacity: 0.75 } }, "Opening prepares ATL project state and starts no workers. Your workspace reopens automatically; register other repositories on the Projects page."),
+      h("p", { style: { opacity: 0.75 } }, "ATL keeps its records in one workspace; opening prepares ATL project state and starts no workers. Your workspace reopens automatically \u2014 register other repositories on the Projects page."),
       h("button", { type: "submit", disabled: busy || !project.trim(), style: buttonStyle }, busy ? "Opening\u2026" : "Open Control Plane"),
       error ? h("p", { role: "alert" }, error) : null
     )
@@ -150,6 +160,6 @@ function AtlPanel() {
 function apply(ctx) {
   ctx.slots.inject("main", () => ctx.slots.register({ name: "main", key: PANEL }, AtlPanel));
   ctx.slots.inject("sidebar.panellist", () => ctx.slots.register({ name: "sidebar.panellist", id: PANEL, order: 15, label: () => "ATL" }, ({ size = 20 }) => h("span", { "aria-hidden": true, style: { fontSize: size, fontWeight: 700 } }, "\u25C7")));
-  ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({ name: "plugins.bundle.config", key: "@depie99/atl-plugin" }, () => h("section", { style: { padding: "20px 0" } }, h("h2", null, "ATL Control Plane"), h("p", null, "Open the embedded workspace to select a project and manage your work."), h("button", { type: "button", onClick: () => ctx.layout.selectPanel(PANEL) }, "Open Control Plane"))));
+  ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({ name: "plugins.bundle.config", key: "@depie99/atl-plugin" }, () => h("section", { style: { padding: "20px 0" } }, h("h2", null, "ATL Control Plane"), h("p", null, "Open the embedded workspace to manage your work."), h("button", { type: "button", onClick: () => ctx.layout.selectPanel(PANEL) }, "Open Control Plane"))));
 }
 return module.exports;}});

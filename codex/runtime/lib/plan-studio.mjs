@@ -1242,6 +1242,11 @@ function approvePlanDraftUnlocked(root, draft, { note = "approved by manager in 
     const nextState = loadState(root);
     const stored = nextState.tasks[task.id];
     stored.plan_draft_id = loaded.id;
+    if (loaded.source_task_id) {
+      const request = nextState.tasks[loaded.source_task_id];
+      stored.source_task_id = loaded.source_task_id;
+      stored.source_origin = request?.source ? { ...request.source } : null;
+    }
     stored.plan_proposal_id = proposal.id;
     stored.plan_queue_id = queueId;
     stored.plan_artifact_path = loaded.artifactPath;

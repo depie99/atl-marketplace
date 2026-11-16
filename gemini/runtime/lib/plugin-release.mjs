@@ -52,6 +52,10 @@ export function verifyPluginRelease(root, expected) {
     if (expected && expected.dependencies.sha256 !== dependencies.sha256) throw new Error('Plugin production dependencies differ from the release snapshot.');
   }
   if (release.format >= 3) {
+    if (pkgClient(root)) {
+      const client = release.ui?.deepseek;
+      if (client?.path !== 'plugin-ui/deepseek-client.js' || digest(fs.readFileSync(path.join(root, client.path))) !== client.sha256) throw new Error('DeepSeek client asset differs from its release manifest.');
+    }
     if (release.ui?.path !== 'plugin-ui/panel.js' || digest(fs.readFileSync(path.join(root, release.ui.path))) !== release.ui.sha256) throw new Error('Plugin panel asset differs from its release manifest.');
     if (expected && expected.ui?.sha256 !== release.ui.sha256) throw new Error('Plugin panel asset differs from the release snapshot.');
   }
@@ -59,4 +63,8 @@ export function verifyPluginRelease(root, expected) {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   if (pkg.version !== release.version) throw new Error('Plugin package and release versions differ.');
   return release;
+}
+
+function pkgClient(root) {
+  return Boolean(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).dsh?.client);
 }

@@ -10,6 +10,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atl-review-contract-'));
 const repo = path.join(root, 'repo'); fs.mkdirSync(repo);
 const git = args => execFileSync('git', args, { cwd: repo, windowsHide: true, stdio: 'pipe' });
 git(['init']); fs.writeFileSync(path.join(repo, 'cart.js'), 'export function cart() { return "old"; }\n');
+fs.mkdirSync(path.join(repo, '.agents/skills/cart'), { recursive: true });
+fs.writeFileSync(path.join(repo, '.agents/skills/cart/SKILL.md'), 'Cart task instructions are agent guidance, not application behavior.');
 git(['add', '.']); git(['-c', 'user.name=ATL Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture']);
 const connection = 'https://azure.invalid/collection';
 const item = (id, state_category) => ({ key: `${connection}|Alpha|${id}`, connection, project: 'Alpha', id, rev: 1, title: 'Cart item request', description_text: 'Change cart item behavior.', acceptance_criteria: 'Cart persists.', area_path: 'Alpha\\Cart\\Web', state_category, priority: 2, changed_at: '2026-11-13T09:00:00Z', url: `${connection}/Alpha/_workitems/edit/${id}` });
@@ -36,6 +38,7 @@ try {
   await settle(() => engine.status().ready === 3);
   assert.deepEqual(calls.map(p => p.item.id), [2, 1, 3], 'all statuses are reviewed, including Done');
   assert.ok(calls[0].evidence.some(e => e.path === 'cart.js'), 'review reads a bounded excerpt of the linked repository');
+  assert.ok(calls.every(call => call.evidence.every(entry => !entry.path.startsWith('.agents/'))), 'agent skill instructions cannot consume the application evidence budget');
   assert.equal(engine.get(records[0].key).coverage, 'code');
   const originalCalls = calls.length; engine.get(records[0].key); engine.decorate(records); engine.status();
   assert.equal(calls.length, originalCalls, 'all reads are pure and never invoke an agent');
@@ -106,5 +109,9 @@ try {
   assert.throws(() => validateReview(invalid, []), /not read/);
   const diagram = output({ evidence: [] }).diagram; diagram.nodes = diagram.nodes.map((node, i) => ({ ...node, id: `n${i}` })); diagram.nodes[0].label = '"] --> injected["<script>';
   assert.ok(!reviewMermaid(diagram).includes('<script>'), 'Mermaid labels are escaped and graph identities are server-controlled');
+  diagram.nodes[0].label = 'Unknown: Unknown: cart persistence';
+  diagram.nodes[0].kind = 'unknown';
+  assert.match(reviewMermaid(diagram), /Unknown: cart persistence/);
+  assert.ok(!reviewMermaid(diagram).includes('Unknown: Unknown:'), 'generated node labels get one status prefix');
   console.log('PASS: review queue, all statuses, bindings, code evidence, dirty/revision invalidation, locale cache, restart, auth pause, retry ceiling, task-only fallback, citation validation and safe diagrams');
 } finally { engines.forEach(engine => engine.stop()); }

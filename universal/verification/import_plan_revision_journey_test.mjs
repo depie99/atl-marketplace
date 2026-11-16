@@ -127,6 +127,7 @@ try {
   await page.getByText('Plan approved — Plan Queue created', { exact: true }).waitFor();
   const approvedTasks = Object.values(loadState(root).tasks).filter(task => task.plan_draft_id === draftId);
   assert.equal(approvedTasks.length, 2);
+  assert.ok(approvedTasks.every(task => task.source_task_id === 'T-001' && task.source_origin?.type === 'azure' && task.source_origin.remote_id === 741), 'executable tasks preserve their original Azure work item independently of the plan source');
   assert.match(approvedTasks.find(task => task.plan_proposal_id === 'p1').instructions || approvedTasks.find(task => task.plan_proposal_id === 'p1').dispatch_contract?.instructions || '', /Preserve quantities/);
   assert.equal(loadQueueBook(root).queues[approvedTasks[0].plan_queue_id].items.length, 2);
   assert.ok(approvedTasks.every(task => task.status !== 'in_progress'));

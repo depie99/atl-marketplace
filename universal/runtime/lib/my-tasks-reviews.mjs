@@ -21,7 +21,7 @@ function write(file, value) {
 const freshBook = () => ({ version: 1, locale: 'en-US', entries: {}, jobs: [], paused: null });
 const slot = (key, locale) => hash([key, locale]);
 const git = (root, args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
-const safeFile = name => !/(^|[/\\])(node_modules|vendor|dist|\.git|\.trust)([/\\]|$)|(^|[/\\])\.env|secret|credential|private.?key|\.lock$/i.test(name) && /\.(m?[jt]sx?|[cm]js|py|cs|go|rs|java|php|rb|vue|svelte|sql|html|scss|css|md|json|ya?ml)$/i.test(name);
+const safeFile = name => !/(^|[/\\])(node_modules|vendor|dist|\.git|\.trust|\.agents|\.claude|\.codex|\.zcode|skills)([/\\]|$)|(^|[/\\])(AGENTS|CLAUDE|SKILL)\.md$|(^|[/\\])\.env|secret|credential|private.?key|\.lock$/i.test(name) && /\.(m?[jt]sx?|[cm]js|py|cs|go|rs|java|php|rb|vue|svelte|sql|html|scss|css|md|json|ya?ml)$/i.test(name);
 
 export function resolveReviewRepositories(item, bindings, imported = []) {
   const override = bindings.items?.[item.key];
@@ -117,7 +117,8 @@ export function validateReview(output, evidence) {
 export function reviewMermaid(diagram, locale = 'en-US') {
   const labels = locale === 'fa-IR' ? { observed: 'مشاهده‌شده', proposed: 'پیشنهادی', unknown: 'نامشخص' } : { observed: 'Observed', proposed: 'Proposed', unknown: 'Unknown' };
   const escape = value => String(value).replace(/[&<>"\[\]{}|`\r\n]/g, char => `#${char.charCodeAt(0)};`);
-  return ['flowchart TB', ...diagram.nodes.map(n => `${n.id}["${escape(labels[n.kind] + ': ' + n.label)}"]:::${n.kind}`), ...diagram.edges.map(e => `n${e.from} --> n${e.to}`), 'classDef observed fill:#e4f2ec,stroke:#197653,color:#123d2d', 'classDef proposed fill:#e8eefb,stroke:#496eb2,color:#233758', 'classDef unknown fill:#fff4de,stroke:#997119,color:#543d0d,stroke-dasharray:5 4'].join('\n');
+  const label = node => String(node.label).replace(/^(?:(?:Observed|Proposed|Unknown|مشاهده‌شده|پیشنهادی|نامشخص)\s*:\s*)+/iu, '');
+  return ['flowchart TB', ...diagram.nodes.map(n => `${n.id}["${escape(labels[n.kind] + ': ' + label(n))}"]:::${n.kind}`), ...diagram.edges.map(e => `n${e.from} --> n${e.to}`), 'classDef observed fill:#e4f2ec,stroke:#197653,color:#123d2d', 'classDef proposed fill:#e8eefb,stroke:#496eb2,color:#233758', 'classDef unknown fill:#fff4de,stroke:#997119,color:#543d0d,stroke-dasharray:5 4'].join('\n');
 }
 
 export function createMyTasksReviews(root, { invoke, getItems = null, registry = () => supervisorSnapshot().projects, imported = () => { try { return Object.values(loadState(root).tasks || {}); } catch { return []; } }, canRun = () => true, now = () => Date.now(), intervalMs = 15000, retryMs = 60000 } = {}) {

@@ -18,6 +18,7 @@
     "Work item": "مورد کاری",
     "⟳ Sprints": "⟳ اسپرینت‌ها",
     "Workflow runs": "اجرای گردش‌کارها",
+    "Run activity": "فعالیت اجرا",
     "Select a workflow run": "یک اجرا را انتخاب کنید",
     "Not connected": "متصل نیست",
     "Connect Azure Boards once from": "ابتدا یک‌بار از صفحهٔ",

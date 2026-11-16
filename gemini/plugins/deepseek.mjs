@@ -2,6 +2,7 @@
 // Raw JSON Schema ToolDefinition is part of dsh-tools' public contract;
 // validation is owned by plugin-host, so no host package copy is required.
 import { createPluginHost, pluginTools } from '../runtime/lib/plugin-host.mjs';
+import { registerDeepSeekPanel } from './deepseek-panel.mjs';
 
 export const name = 'agent-trust-ladder';
 export const inject = ['tools'];
@@ -18,6 +19,8 @@ function nativeSchema(node) {
 export function apply(ctx) {
   const host = createPluginHost();
   ctx.effect(() => () => host.close());
+  // Optional: CLI-only profiles keep their tools without waiting for a web host.
+  ctx.inject?.(['connection'], child => registerDeepSeekPanel(child, host));
   for (const tool of pluginTools) {
     ctx.tools.register({
       name: tool.name,

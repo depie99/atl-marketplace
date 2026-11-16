@@ -1,9 +1,9 @@
 {
   "format": 3,
-  "version": "0.6.15",
+  "version": "0.6.16",
   "runtimeVersion": "0.2.0",
   "content": {
-    "sha256": "43591c4e55b2d5ec89b31a1712f14c2abdb776e977f87647dfa592dd4351f155",
+    "sha256": "fe73b07fbb5737adb2e85aba8cb95b364498e986e097a024118807e96c117a95",
     "files": {
       "runtime/README.md": "a9d922fccd188cd48171c12d013f6724aab8ba59dd154255f9b7f5bb72d0d237",
       "runtime/assets/atl-logo.svg": "1c12870ee9b3e90ea07dde99510d498c841d7a97c760d588a2a616237de13861",
@@ -19,10 +19,10 @@
       "runtime/connect.html": "bb34b59a8e9285124cf6c1eec79851fa70c0a34f1a9001b872176422e6c41f2d",
       "runtime/connect.js": "43a2d8c8660a3dbcf05e99b2ffe29ea099de098c9dd32b7ea29217821cb39a26",
       "runtime/control-plane-changes.js": "718c4ec4bd7732a295fcd61f8fa7161d8c8cfdacf37c60efc880381b4f25009f",
-      "runtime/control-plane-client.js": "1a951b6460252bacfbe34a63f02a5c6173cf919123cb7ce4be360888b077e6fe",
-      "runtime/control-plane-i18n.js": "971d2b3525910537ae0da2f299d0c300ffe66d6af788e6bcd797b82731ef87ed",
+      "runtime/control-plane-client.js": "15d7f4170edbfe91fde033e21ee132b2908956449fc77cff5028d3dc103036d1",
+      "runtime/control-plane-i18n.js": "95d65447f4576a8aa21582a9cbb9ebaf113d92b799a7b789397bdd0f0095e215",
       "runtime/control-plane-my-tasks.js": "a4a721932578823d50ebcf9c022c696905a8e6a7ef4ca2a44f17e61399a6b739",
-      "runtime/control-plane.html": "05b3c5eab3a50177e1a2348d6abd43401bf9ce4387f9df8159bfa225eea9300d",
+      "runtime/control-plane.html": "20042e0a5a2f0e8f5864caabc8075877973c7ffb509a42a33350dabd5dcae1b1",
       "runtime/defaults/model-routing.json": "1fa0fe26dc7c0c2598f248314f7f8266d261dfc84d96235a63195109d201a58b",
       "runtime/lib/approvals.mjs": "cd619cc78d7ffb91e7ef7d790ecd37ed1f4ffc3a7a4925ec75e4031900fdfc82",
       "runtime/lib/azure-connection.mjs": "c18305e85b54c89660f076195432ba511ecbd7aa6206dbf283b0af5f584b4190",
@@ -43,7 +43,7 @@
       "runtime/lib/dispatch-preflight.mjs": "ecc4f9dabd55060e4bfaf7503b1b6c38259091f4ec3865612bd611ff2815e8c9",
       "runtime/lib/dispatcher.mjs": "7ae04f6a34f09eeff4447b47672470a62b07dc3e3cb9564fa3cafb84729bf0d7",
       "runtime/lib/egm-review.mjs": "a2aaecfb229a61820357dc1fa09a9a6460879ecc81c01f60f6766d7c6a7ed69f",
-      "runtime/lib/execution-access.mjs": "534ff6c2778c12814bf7bc0827f741e1e4a7c3f3514e0acc91c67550459a2720",
+      "runtime/lib/execution-access.mjs": "2013d41e2fd9f79e3a86aa82e166b369b3c6d5ccb45542d3d883e93111f80931",
       "runtime/lib/execution-report.mjs": "925197002b9e6958632f00f86e2d0f8817eea74ddc2e7f06b5d8b8bd2fee3cbf",
       "runtime/lib/feed.mjs": "47a8dacad516e91281a5d920c0d050a1297954600f241cda95bec76210811ed3",
       "runtime/lib/feedback.mjs": "2672180a1826c7b07538a9fb9bb972999984e4282009f966d02a33cf3365a3a2",
@@ -106,7 +106,7 @@
       "runtime/lib/userProviders.mjs": "c524983dfdb81a902ba2c94f9d726adb94b5dcdff82dc573d057c7605691229c",
       "runtime/lib/visual-pr.mjs": "d4ccf1e287eaca086e72f54b199ed21bcfcf19f0f9699ddaa2dfa730ae26ab09",
       "runtime/lib/worker-channel-client.mjs": "e0f872f45eef0c93d7d2a35c963005a7784ce7e101e4f54853c8029a1d9d5e79",
-      "runtime/lib/worker-channel.mjs": "718d7fb784737ee6aa22e207d2eb38e78f96078bd85c85a84ca1a826b22c8e02",
+      "runtime/lib/worker-channel.mjs": "f4407ec4fed1200ca24771709b0c29560c1d7f1dc335d11e3cd13fa1bf9f9a9b",
       "runtime/lib/worker.mjs": "9b40b4231c719f8211bc83080ca61ec43ab9275a6ca5be0ccbd8e335b753d47f",
       "runtime/lib/workspace.mjs": "87eb9344376ab9214b6d97ae6f4be87bdc1c4435c469d93c016039b37c8ea584",
       "runtime/prompts/beacon.md": "0232f61ef6c8996c795f90aa0d462915a0db7561f3ab49edb6b241d6e7c8346a",
@@ -114,7 +114,7 @@
       "runtime/prompts/pip.md": "c4e0bbd40eb294a768453a82fb183a9b9df83d9c2609eb103675d148736c40f6",
       "runtime/prompts/rowan.md": "49d5a482053f562bcbc5661c7037c4c24dec1ec699b1d7d325b6d295eb1db0e2",
       "runtime/prompts/sage.md": "dae44dc35accdccc370d8b3babf054ac87b395cd5441da97da78940100e5c3e7",
-      "runtime/scss/_app.scss": "8d2d996cb5ab8bdc853594e99ab235b2af20ac00b84ea54c0f38398508fdee5e",
+      "runtime/scss/_app.scss": "83ce660de1f83a65e2a95ca6b1edba00e72c9d20a9145c5ce24e983414f9682b",
       "runtime/scss/_my-tasks.scss": "7d27a10f33d41fbd4a56990d77dd881c893fc00c9894f61cf453f90fe398ab1a",
       "runtime/scss/_plugin.scss": "c8096423038bf97f89682e9818a6ae2dfee6dd863cadaa753978de4e8f86303f",
       "runtime/scss/_sources.scss": "dc626d70a8627fdea21f97ec17a08b5214bc7fd017456717690cfc9eb3e07940",
@@ -359,8 +359,8 @@
       "verification/control_room_test.mjs": "a32ff578b7e134850f44a5aedcda9f93a4609b1befa1d352925d3cfae1c43699",
       "verification/control_room_ui_test.mjs": "65da7442cad283b34a723379e7c72ac5ef4311b5a59791e7c11e32eae20a7cc1",
       "verification/dashboard_test.mjs": "b17402c3b60982cd16de4634ef8df7af81b76f5ad9688bb0f813fcd54b369bf9",
-      "verification/deepseek_panel_test.mjs": "a22c021a5928690b6353b1015d10c9c78621abf52645b55b28433efa7afac959",
-      "verification/deepseek_recovery_test.mjs": "8eee98d72549ceb2658c924f69fb736fd43cda503c3327db39a2819e0b820fcb",
+      "verification/deepseek_panel_test.mjs": "c6f2ac0daeaee2b2f4b4b68d6cf9791af28892b8d83ad99dd4082126e7d7ea35",
+      "verification/deepseek_recovery_test.mjs": "d60a47c109c2e689c7cae69df8cb4692165e17c93c7d13a461b5c3883bf08530",
       "verification/dependencies_model.py": "737a8342283e7233ca008fd20aba6b6cf87dd5df4233f5cc9caca24ce4b6f230",
       "verification/developer_delivery_contract_test.mjs": "2d79595634683003a276f4adfcf9a2bd4f7c6ea7bdad6480c87cb105e8a9e3ab",
       "verification/developer_delivery_receipt_test.mjs": "0ea712337014818e62f6c314310ca31076e4c7354fefeaaafbb6afa0735d120e",
@@ -474,6 +474,7 @@
       "verification/run_abort_test.mjs": "116765d8c28b45e5fcc8434a9c481475d8f997c7924584f4fa7e923e6c810887",
       "verification/run_control_plane_test.mjs": "95e8b33ca6406aeac832842e1c4c11c65cca7091fb30bd621f66c6029a445391",
       "verification/run_mock_regression.mjs": "d3138ab2becb4d05993dd987a99fa27c0105a1058f8e2b395bc43b96a62a3c5c",
+      "verification/runs_view_test.mjs": "4fca449bfa7ea9341ccc992a9cedcd7610e599d050f5c4b364463ede8ada92a3",
       "verification/session_auth_test.mjs": "4ce4120cddf6f97145eafe021aed2784d7242147e160bf93ae0eb21079e576f3",
       "verification/skill_install_test.mjs": "e019cfb74660cb1e5337da443f114d31260c5387a92516f8f0558f625459db4b",
       "verification/snapshot_delta_test.mjs": "0b79b35e4fbaa6d7de82c3257354b21b97b967d96e19c93af378bd0b938fd947",
@@ -504,9 +505,9 @@
       "verification/worker_windows_timeout_test.mjs": "57adb0abd9bbf7d0697054f7fabf42e5dfbd9992a77a2798280be1fa37078992",
       "verification/workspace_test.mjs": "2e346088d444f6cdcffedba5b6f259e98c56a0a2fb2ede922e9f27b7da7d23bb",
       "plugins/README.md": "e80f8390429daa18b88652b57927f5e2151e64e6f69acda237784509d02e34ea",
-      "plugins/deepseek-client.mjs": "faf7de20cdc7cd39a0248c627ab78b4cc1e8e9a4c97cb22f5a70e33385e2655e",
+      "plugins/deepseek-client.mjs": "7616997ee41dc4c2daf7378ba884ff43bf0cf5558706719b9466aa73174a2500",
       "plugins/deepseek-frame.mjs": "32a7cd29b3cf62ea878faa16580a79de27cff1e5983ffe3fc21e4162a0617058",
-      "plugins/deepseek-panel.mjs": "3b495202a774a70c284d0aae385eac3038d45fbcc0864b8c67788c850f46ae7b",
+      "plugins/deepseek-panel.mjs": "194d108d6e50ab6bf7830c31ae0e145023c7bab2310ca1fa5e7f0662b4df01b8",
       "plugins/deepseek.mjs": "486bb2e8146ee807a9eeb134c81e3fb7150878da617146f01ed7de734f81408a",
       "plugins/panel-entry.mjs": "bc93b7d9dae30f81d4f7a0b5bf8012a55ac60be618a8fa082a0f85a6bd08ec72",
       "plugins/panel-template.html": "2057307c10bb73e01b53d6ec53b970a4f754baf6ec005442ab3db55d8260a3ec"
@@ -522,7 +523,7 @@
     "sha256": "ae65fac5926f19a3f0120cae84adf7e670ea70a98ed7240d3ba3d27cb5ef65bb",
     "deepseek": {
       "path": "plugin-ui/deepseek-client.js",
-      "sha256": "395d7a0afa70a77c4c4b3ab52883f3cee0d28e460e5454f3a926aa46a77a379e"
+      "sha256": "97e36fb27d5578c26689858c6fe407da412e243374c1416466707aa718b9d737"
     }
   }
 }

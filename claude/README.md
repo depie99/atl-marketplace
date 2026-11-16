@@ -2,7 +2,7 @@
 
 Evidence-gated engineering skills and a local Control Plane for tasks, queues, agent teams, and bounded execution.
 
-Use the [complete ATL plugin](docs/getting-started.md#use-the-complete-plugin) to get the runtime, Control Plane and all skills inside Codex, ZCode, Claude Code, Cursor, DeepSeek Harness, Gemini CLI or another harness with local MCP tools. Compatible ZCode Desktop versions show the complete Control Plane in an ATL session panel; other hosts can open its bundled browser UI. ATL Connect provides bilingual setup and project opening. This bundle is part of the public marketplace distribution at [depie99/atl-marketplace](https://github.com/depie99/atl-marketplace). The standalone installation below remains available.
+Use the [complete ATL plugin](docs/getting-started.md#use-the-complete-plugin) to get the runtime, Control Plane and all skills inside Codex, ZCode, Claude Code, Cursor, DeepSeek Harness, Gemini CLI or another harness with local MCP tools. Compatible ZCode Desktop versions show the complete Control Plane in an ATL session panel; other hosts can open its bundled browser UI. ATL Connect provides bilingual setup and project opening. Build local bundles with `npm run plugins:build`; the public marketplace distribution lives at [depie99/atl-marketplace](https://github.com/depie99/atl-marketplace). The standalone installation below remains available.
 
 [Documentation website](https://depie99.github.io/Agent-Trust-Ladder/) · [Getting started](docs/getting-started.md) · [Feature map](docs/guides.md) · [فارسی](README.fa.md)
 

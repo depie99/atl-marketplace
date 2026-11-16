@@ -96,7 +96,7 @@
   `;
   document.head.append(taskLayoutStyle);
   const routes = [
-    ["overview", "▦", "Overview"], ["tasks", "☷", "Tasks"], ["shipped", "✔", "Shipped"], ["sources", "?", "Issue sources"], ["mytasks", "☰", "My Tasks"], ["assistant", "✦", "Ask ATL"], ["studio", "◇", "Plan Studio"], ["queues", "≡", "Queues"],
+    ["overview", "▦", "Overview"], ["tasks", "☷", "Tasks"], ["shipped", "✔", "Shipped"], ["sources", "?", "Issue sources"], ["mytasks", "☰", "My Tasks"], ["assistant", "✦", "Ask ATL"], ["studio", "◇", "Plan Studio"], ["queues", "≡", "Queues"], ["runs", "◷", "Workflow runs"],
     ["team", "♙", "Agent Team"], ["projects", "⌂", "Projects"], ["approvals", "✓", "Approvals"], ["operations", "▣", "Operations"], ["batches", "▥", "Batches"], ["brain", "◈", "Knowledge"], ["activity", "▤", "Activity & Logs"], ["usage", "◉", "Usage & Limits"], ["settings", "⚙", "Settings"],
   ];
   const fallback = {
@@ -115,6 +115,7 @@
     overview: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/>',
     tasks: '<rect x="3.5" y="4" width="4.8" height="16" rx="1.5"/><rect x="9.6" y="4" width="4.8" height="10.5" rx="1.5"/><rect x="15.7" y="4" width="4.8" height="13.5" rx="1.5"/>',
     queues: '<path d="m12 4 8.5 4.7L12 13.4 3.5 8.7 12 4z"/><path d="m3.5 13.4 8.5 4.7 8.5-4.7"/>',
+    runs: '<path d="M4 18.4h4.2v-4.2h4.2v-4.2h4.2V5.8h4.2"/>',
     approvals: '<path d="M12 3 5 5.7v5.5c0 4.3 2.9 7.7 7 9.8 4.1-2.1 7-5.5 7-9.8V5.7L12 3z"/><path d="m9.2 11.7 2 2 3.8-4.3"/>',
     studio: '<rect x="7.1" y="7.1" width="9.8" height="9.8" rx="1.3" transform="rotate(45 12 12)"/>',
     shipped: '<path d="M12 3 4 7.3v9.4L12 21l8-4.3V7.3L12 3z"/><path d="M4 7.3l8 4.3 8-4.3M12 11.6V21"/>',
@@ -1173,8 +1174,143 @@ ${resourceSummary(currentDraft?.resources?.[proposal.id])}<div class="muted tiny
     const empty = $(".source-empty");
     if (empty) empty.hidden = visible.length > 0;
   }
+  // ---------- Workflow runs (Kiro-style task process tracking) ----------
+  // The queue run's own progress narrative already records every session
+  // spawn ("[T-036] session 15/8 · rowan · claude · glm-5.3-flash", the
+  // workspace/transcript lines that follow, and "<role> session finished ·
+  // exit 0"), so the whole role ladder renders client-side with no new
+  // server surface and no restart of an active run.
+  function parseRunWorkflow(progressLines = []) {
+    const sessions = [];
+    const byTask = new Map();
+    for (const raw of progressLines) {
+      const line = String(raw);
+      let m = /^\[(T-[\w-]+)\] session (\d+)\/(\d+) · (\w+) · (\w+) · (.+)$/.exec(line);
+      if (m) {
+        const session = { taskId: m[1], n: Number(m[2]), ceiling: Number(m[3]), role: m[4], worker: m[5], model: m[6], exit: null, transcript: null, workspace: null };
+        sessions.push(session);
+        if (!byTask.has(session.taskId)) byTask.set(session.taskId, []);
+        byTask.get(session.taskId).push(session);
+        continue;
+      }
+      m = /^\[(T-[\w-]+)\] (\w+) session finished · exit (\d+)/.exec(line);
+      if (m) {
+        const list = byTask.get(m[1]) || [];
+        for (let i = list.length - 1; i >= 0; i--) if (list[i].role === m[2] && list[i].exit == null) { list[i].exit = Number(m[3]); break; }
+        continue;
+      }
+      m = /^\s+transcript: (.+)$/.exec(line);
+      if (m) { if (sessions.length) sessions[sessions.length - 1].transcript = m[1]; continue; }
+      m = /^\s+workspace: (.+)$/.exec(line);
+      if (m) { if (sessions.length) sessions[sessions.length - 1].workspace = m[1]; }
+    }
+    return { sessions, byTask };
+  }
+  const WF_STATUS = {
+    done: { cls: "done", glyph: "✓", label: "Done" },
+    verifying: { cls: "running", glyph: "◌", label: "Verifying" },
+    in_review: { cls: "running", glyph: "◌", label: "In review" },
+    in_progress: { cls: "running", glyph: "◌", label: "Running" },
+    assigned: { cls: "running", glyph: "◌", label: "Assigned" },
+    triaged: { cls: "running", glyph: "◌", label: "Triaged" },
+    blocked: { cls: "blocked", glyph: "!", label: "Blocked" },
+    escalated: { cls: "blocked", glyph: "!", label: "Escalated" },
+    rejected: { cls: "blocked", glyph: "✕", label: "Rejected" },
+  };
+  const wfStatus = (task) => WF_STATUS[task?.status] || { cls: "pending", glyph: "○", label: task?.status || "Queued" };
+  const wfDuration = (ms) => {
+    if (!Number.isFinite(ms) || ms < 0) return "—";
+    const total = Math.round(ms / 1000);
+    const h = Math.floor(total / 3600), mnt = Math.floor((total % 3600) / 60), s = total % 60;
+    return h ? `${h}h ${mnt}m` : mnt ? `${mnt}m ${s}s` : `${s}s`;
+  };
+  const wfShortPath = (value) => String(value || "").split(/[\\/]/).filter(Boolean).pop() || "—";
+  function wfStepRow(task, index, total, live) {
+    const meta = wfStatus(task);
+    const state = (snapshot.state || {}).tasks || {};
+    const raw = state[task.id] || {};
+    const sessionList = (parseRunWorkflow((currentRun || {}).progress || []).byTask.get(task.id)) || [];
+    const last = sessionList[sessionList.length - 1] || null;
+    const chips = [
+      sessionList.length ? `<span class="pill blue">${escapeHtml(String(sessionList.length))} sessions</span>` : "",
+      Number.isFinite(Number(raw.execution_budget?.ceiling)) ? `<span class="pill">${escapeHtml(String(raw.execution_budget?.used ?? sessionList.length))}/${escapeHtml(String(raw.execution_budget?.ceiling))} budget</span>` : "",
+      (raw.evidence || []).length ? `<span class="pill violet">${escapeHtml(String((raw.evidence || []).length))} evidence</span>` : "",
+      last ? `<span class="pill">${escapeHtml(last.role)} · ${escapeHtml(last.model || last.worker)}</span>` : "",
+    ].filter(Boolean).join(" ");
+    const waiting = (task.plan_depends_on || []).length && meta.cls === "pending" ? `<div class="muted tiny" style="margin-top:4px">waiting for prerequisite${task.plan_depends_on.length === 1 ? "" : "s"}: ${escapeHtml((task.plan_depends_on || []).join(", "))}</div>` : "";
+    const blocker = meta.cls === "blocked" && raw.blocker?.reason ? `<div class="muted tiny" style="margin-top:4px;color:var(--warn,#b45309)">${escapeHtml(String(raw.blocker.reason).slice(0, 160))}</div>` : "";
+    return `<button class="wf-step ${meta.cls}${live ? " live" : ""}" type="button" data-action="wf-task:${escapeHtml(task.id)}"><span class="wf-dot ${meta.cls}" aria-hidden="true">${meta.glyph}</span><span class="wf-stepmain"><span class="wf-steptitle"><b>${escapeHtml(task.title || task.id)}</b><span class="muted tiny">${escapeHtml(task.id)} · step ${index + 1} of ${total}</span></span>${chips ? `<span class="bar" style="gap:6px;flex-wrap:wrap;margin-top:5px">${chips}</span>` : ""}${waiting}${blocker}</span><span class="wf-stepside">${live ? '<span class="pill green">● live</span>' : `<span class="pill ${meta.cls === "done" ? "green" : meta.cls === "blocked" ? "amber" : ""}">${escapeHtml(meta.label)}</span>`}</span></button>`;
+  }
+  function runsPanel() {
+    const run = currentRun || {};
+    const { sessions } = parseRunWorkflow(run.progress || []);
+    const state = (snapshot.state || {}).tasks || {};
+    const all = Object.values(state);
+    const chainTasks = all.filter((task) => task.plan_queue_id && !task.archived);
+    const byQueue = new Map();
+    for (const task of chainTasks) {
+      const key = task.plan_queue_id;
+      if (!byQueue.has(key)) byQueue.set(key, []);
+      byQueue.get(key).push(task);
+    }
+    for (const list of byQueue.values()) list.sort((a, b) => String(a.plan_proposal_id || a.id).localeCompare(String(b.plan_proposal_id || b.id), undefined, { numeric: true }));
+    const runQueueIds = new Set([...(run.queueIds || []), run.queueId || null].filter(Boolean));
+    const queueStarted = (queueId) => byQueue.get(queueId).some((task) => task.status !== "new" && task.status !== "queued");
+    const queueRank = (queueId) => (runQueueIds.has(queueId) ? 0 : queueStarted(queueId) ? 1 : 2);
+    const started = run.startedAt ? new Date(run.startedAt) : null;
+    const elapsed = started && run.status === "running" ? wfDuration(Date.now() - started.getTime()) : started && run.finishedAt ? wfDuration(new Date(run.finishedAt) - started) : null;
+    const statusPill = run.status === "running" ? '<span class="pill green">● running</span>'
+      : run.status === "owner-blocked" ? '<span class="pill amber">owner-blocked</span>'
+        : run.status === "failed" ? '<span class="pill red">failed</span>'
+          : run.status === "complete" ? '<span class="pill green">completed</span>'
+            : `<span class="pill">${escapeHtml(run.status || "idle")}</span>`;
+    const headerCards = `<div class="bar" style="margin-bottom:14px;gap:8px;flex-wrap:wrap">${statusPill}${started ? `<span class="pill">started ${escapeHtml(started.toLocaleTimeString())}</span>` : ""}${elapsed ? `<span class="pill violet">elapsed ${escapeHtml(elapsed)}</span>` : ""}${sessions.length ? `<span class="pill blue">${escapeHtml(String(sessions.length))} sessions</span>` : ""}${run.currentTaskId ? `<span class="pill green">current ${escapeHtml(run.currentTaskId)}</span>` : ""}</div>`;
+    let chains;
+    if (byQueue.size) {
+      chains = [...byQueue.entries()].sort((a, b) => queueRank(a[0]) - queueRank(b[0])).map(([queueId, tasks]) => {
+        const live = tasks.some((task) => task.id === run.currentTaskId);
+        const doneCount = tasks.filter((task) => task.status === "done").length;
+        return card(`${escapeHtml(queueId)} <span class="muted tiny">· ${escapeHtml(String(doneCount))}/${escapeHtml(String(tasks.length))} done${live ? " · active" : ""}</span>`, `<div class="wf-chain">${tasks.map((task, index) => wfStepRow(task, index, tasks.length, task.id === run.currentTaskId)).join("")}</div>`);
+      }).join('<div class="space"></div>');
+    } else {
+      chains = card("Workflow runs", '<div class="pad muted">No plan-owned task chains yet — approve a plan in Plan Studio and launch a queue run, and its task ladder with per-session roles appears here live.</div>');
+    }
+    const stream = (run.progress || []).slice(-10).reverse().map((line) => `<div class="wf-event">${escapeHtml(String(line))}</div>`).join("");
+    return head("WORKSPACE / WORKFLOW RUNS", "Workflow runs", "Every plan chain as checked steps — role ladder, evidence and gates per task, quality enforced at every step.", btn("Queues →", "go:queues", "sm"))
+      + headerCards
+      + chains
+      + (stream ? `<div class="space"></div>${card("Run activity", `<div class="pad wf-stream">${stream}</div>`)}` : "");
+  }
+  function workflowDetailBody(taskId) {
+    const state = (snapshot.state || {}).tasks || {};
+    const task = state[taskId] || {};
+    const run = currentRun || {};
+    const sessionList = (parseRunWorkflow(run.progress || []).byTask.get(taskId)) || [];
+    const meta = wfStatus(task);
+    const checks = Array.isArray(task.completion_checks) ? task.completion_checks : [];
+    const done = task.status === "done";
+    const steps = sessionList.length ? sessionList.map((session, index) => {
+      const last = index === sessionList.length - 1;
+      const running = last && session.exit == null && run.status === "running" && run.currentTaskId === taskId;
+      const cls = session.exit == null ? (running ? "running" : "pending") : session.exit === 0 ? "done" : "failed";
+      const glyph = cls === "done" ? "✓" : cls === "running" ? "◌" : cls === "failed" ? "✕" : "○";
+      const isLast = index === 0 ? "first" : "";
+      return `<div class="wf-session ${cls}"><span class="wf-dot ${cls}" aria-hidden="true">${glyph}</span><div><b>session ${escapeHtml(String(session.n))} · ${escapeHtml(session.role)}</b><div class="muted tiny">${escapeHtml(session.worker)} · ${escapeHtml(session.model || "provider default")}${session.exit != null ? ` · exit ${escapeHtml(String(session.exit))}` : running ? " · running" : ""}</div>${session.transcript ? `<div class="muted tiny">transcript: ${escapeHtml(wfShortPath(session.transcript))}</div>` : ""}</div></div>`;
+    }).join("") : '<div class="muted pad">No sessions recorded for this task in the current run.</div>';
+    const checkRows = checks.length ? checks.map((check) => `<div class="wf-check ${done ? "done" : ""}"><span class="wf-dot ${done ? "done" : "pending"}" aria-hidden="true">${done ? "✓" : "○"}</span><span>${escapeHtml(String(check))}</span></div>`).join("") : '<span class="muted">No completion checks recorded.</span>';
+    const events = (snapshot.state?.log_tail || []).filter((entry) => entry.task === taskId).slice(-8).reverse()
+      .map((entry) => `<div class="wf-event"><span class="muted tiny">${escapeHtml(String(entry.at || "").slice(11, 19))}</span> ${escapeHtml(String(entry.event || ""))} <span class="muted tiny">${escapeHtml(String(entry.detail || "").slice(0, 120))}</span></div>`).join("");
+    const blockerBox = task.blocker?.reason ? `<div class="notice" style="border-color:var(--warn,#b45309)"><b class="amber">Blocked — ${escapeHtml(task.blocker.recovery_owner || "owner")} action needed</b><p class="sub">${escapeHtml(String(task.blocker.reason).slice(0, 400))}</p></div>` : "";
+    return `${blockerBox}<div class="bar" style="gap:8px;flex-wrap:wrap;margin-bottom:12px"><span class="pill ${meta.cls === "done" ? "green" : meta.cls === "blocked" ? "amber" : meta.cls === "running" ? "green" : ""}">${escapeHtml(meta.label)}</span>${(task.evidence || []).length ? `<span class="pill violet">${escapeHtml(String((task.evidence || []).length))} evidence</span>` : ""}${Number.isFinite(Number(task.execution_budget?.ceiling)) ? `<span class="pill">${escapeHtml(String(task.execution_budget?.used ?? 0))}/${escapeHtml(String(task.execution_budget?.ceiling))} budget</span>` : ""}${task.workspace ? `<span class="pill">worktree</span>` : ""}</div>`
+      + `<div class="eyebrow" style="margin:2px 0 8px">ROLE LADDER — QUALITY ENFORCED AT EVERY STEP</div><div class="wf-chain">${steps}</div>`
+      + `<div class="eyebrow" style="margin:16px 0 8px">COMPLETION CHECKS — THE TASK GATE${done ? " — ALL PASSING" : ""}</div><div class="wf-checks">${checkRows}</div>`
+      + (events ? `<div class="eyebrow" style="margin:16px 0 8px">RECENT TASK EVENTS</div><div class="wf-stream">${events}</div>` : "");
+  }
+
+
   const panels = {
     sources: issueSourcesPanel,
+    runs: runsPanel,
     assistant: () => head("WORKSPACE / ASSISTANT", "Ask ATL", "Discuss this project or fix a task in its workspace.", btn("Open assistant", "assistant-open:global", "primary")) + `<div class="notice"><b>Project conversation</b><p>Open Ask ATL from a task to include its brief, blocker, and prerequisites, or request an approved workspace fix.</p></div>`,
     overview: () => {
       const { tasks, events } = derived();
@@ -1617,7 +1753,7 @@ operations: () => {
     // Grouped navigation: presentation order only — the canonical `routes`
     // array (digit shortcuts, palette, session restore) stays untouched.
     const groups = [
-      ["Workspace", ["overview", "tasks", "queues", "approvals"]],
+      ["Workspace", ["overview", "tasks", "queues", "runs", "approvals"]],
       ["Build", ["studio", "shipped", "batches", "sources"]],
       ["Intelligence", ["assistant", "brain", "team"]],
       ["Operations", ["mytasks", "projects", "operations", "activity", "usage", "settings"]],
@@ -2291,6 +2427,7 @@ ${provider.ready ? "" : `<div class="muted tiny" style="margin-top:4px">${escape
       return;
     }
     if (value.startsWith("task-changes:")) { const task = derived().tasks.find((item) => item.id === value.slice(13)); detailExecution = null; if (task && globalThis.ATL_CHANGE_REVIEW) await globalThis.ATL_CHANGE_REVIEW.open(task, { popupWide, btn }); return; }
+    if (value.startsWith("wf-task:")) { const wfId = value.slice(8); const wfTask = (snapshot.state?.tasks || {})[wfId] || derived().tasks.find((item) => item.id === wfId); if (wfTask) { detailExecution = null; popupWide("Workflow · " + wfId, workflowDetailBody(wfId), btn("Show in Tasks", "go:tasks", "sm")); } return; }
     if (value.startsWith("assistant-open:")) { await openAssistant(value.slice(15)); return; }
     if (value === "assistant-send") {
       if (assistantSession?.status === "running") return;

@@ -83,6 +83,11 @@ try {
   await filter.selectOption("needs_investigation");
   await page.waitForFunction(() => document.querySelectorAll(".mt-row").length === 2, null, { timeout: 10000 }).catch(() => {});
   assert.equal(await page.locator(".mt-row").count(), 2, "two active unprepared tasks");
+  const firstCard = page.locator('.mtr-card').first();
+  assert.match(await firstCard.innerText(), /Azure Boards/);
+  assert.match(await firstCard.innerText(), /Sprint 74/);
+  assert.match(await firstCard.innerText(), /P2/);
+  assert.equal(await firstCard.locator('.mtr-card-meta .pill.amber').count(), 1, 'source priority has a colored badge as well as text');
   await filter.selectOption("");
 
   // 2. Preparation tab: brief edit flips the status to ready.

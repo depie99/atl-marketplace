@@ -17,6 +17,9 @@
     "Sprint": "اسپرینت",
     "Work item": "مورد کاری",
     "⟳ Sprints": "⟳ اسپرینت‌ها",
+    "Workflow runs": "اجرای گردش‌کارها",
+    "Run activity": "فعالیت اجرا",
+    "Select a workflow run": "یک اجرا را انتخاب کنید",
     "Not connected": "متصل نیست",
     "Connect Azure Boards once from": "ابتدا یک‌بار از صفحهٔ",
     "(PAT with Work Items: Read), then open": "اتصال دهید (PAT با دسترسی خواندن Work Items)، سپس",
@@ -270,6 +273,12 @@
 "Completed tasks from finished queues live here, off the active Tasks board. The board only holds work that can still run.": "وظایف تکمیل‌شدهٔ صف‌های تمام‌شده این‌جا نگه داشته می‌شوند و از صفحهٔ وظایف فعال خارج هستند. صفحهٔ وظایف فقط کاری را نشان می‌دهد که هنوز قابل اجراست.",
 "Nothing shipped yet.": "هنوز چیزی تحویل نشده است.",
 "When every task in a queue reaches a terminal state, the finished ones move here automatically.": "وقتی همهٔ وظایف یک صف به وضعیت پایانی برسند، موارد تکمیل‌شده به‌صورت خودکار به این‌جا منتقل می‌شوند.",
+"Collapse queue": "جمع‌کردن صف",
+"Expand queue": "بازکردن صف",
+"Unqueued tasks": "وظایف بدون صف",
+"no queue": "بدون صف",
+"Select all shown": "انتخاب همهٔ نمایش‌داده‌شده‌ها",
+"Some tasks were not deleted": "برخی وظایف حذف نشدند",
     "Plan Studio": "استودیوی برنامه‌ریزی",
     "Queues": "صف‌ها",
     "Agent Team": "تیم عامل‌ها",
@@ -683,6 +692,8 @@
       [/^(\d+) logs$/, "$1 گزارش"], [/^(\d+)% complete$/, "$1٪ تکمیل"],
       [/^(\d+) running$/, "$1 در حال اجرا"], [/^Active queue: (.+)$/, "صف فعال: $1"],
       [/^Archive (\d+)$/, "بایگانی $1 مورد"], [/^cap (\d+)$/, "سقف $1"],
+      [/^Delete queue \((\d+)\)$/, "حذف صف ($1)"], [/^Delete (\d+)$/, "حذف $1"],
+      [/^(\d+) shipped$/, "$1 تحویل‌شده"],
     ];
     for (const [pattern, replacement] of replacements) translated = translated.replace(pattern, replacement);
     return `${leading}${translated}${trailing}`;

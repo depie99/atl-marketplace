@@ -1,7 +1,7 @@
 {
   "name": "atl-marketplace",
   "interface": {
-    "displayName": "ATL Marketplace"
+    "displayName": "ATL Local"
   },
   "plugins": [
     {
