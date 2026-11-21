@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "agent-trust-ladder",
-  "version": "0.6.16",
+  "version": "0.6.21",
   "description": "Full ATL: engineering skills, workflows, persistent tasks, bounded execution and the local Control Plane.",
   "author": {
     "name": "depie99",

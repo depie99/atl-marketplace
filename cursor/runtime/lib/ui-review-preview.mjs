@@ -17,7 +17,7 @@ export async function startUiReviewPreview(workspace) {
   fs.mkdirSync(parent, { recursive: true });
   const fixture = fs.mkdtempSync(path.join(parent, "fixture-"));
   const state = emptyState();
-  const sentence = "گزارش در مسیر D:/Projects/Agentic/evidence/check.json ذخیره شد";
+  const sentence = "گزارش در مسیر ${PROJECTS}/evidence/check.json ذخیره شد";
   const task = createTask(state, { title: sentence });
   task.objective = "Synthetic Persian mixed-direction rendering fixture";
   state.log.push({ at: "2026-10-28T08:00:00.000Z", task: task.id, actor: "rowan", event: "preview_fixture", detail: sentence });

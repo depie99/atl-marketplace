@@ -177,18 +177,20 @@ async function ghCliList(repo) {
   return JSON.parse(stdout);
 }
 
-async function ghRestList(repo) {
+async function ghRestList(repo, tokenOverride = null) {
   const headers = { "User-Agent": "atl-manager" };
-  const token = process.env.GITHUB_TOKEN;
+  const token = tokenOverride || process.env.GITHUB_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
   let data;
   try {
     data = await requestJson(`https://api.github.com/repos/${repo}/issues?state=open&per_page=50`, { headers });
   } catch (err) {
-    if (/\b404\b/.test(err.message) && !token) {
+    if (/\b404\b/.test(err.message)) {
       throw new IntakeError(
-        `GitHub returned 404 for ${repo}. On an unauthenticated request this usually means the repo is private.\n` +
-        `  Fix: run "gh auth login", or set GITHUB_TOKEN=<token with repo read access>, then re-run intake.`
+        token
+          ? `GitHub returned 404 for ${repo}. Check the owner/name spelling, and that this token has read access to the repository.`
+          : `GitHub returned 404 for ${repo}. On an unauthenticated request this usually means the repo is private.\n` +
+            `  Fix: run "gh auth login", set GITHUB_TOKEN=<token with repo read access>, or connect a token on the Issue sources page, then search again.`
       );
     }
     throw err;
@@ -202,7 +204,7 @@ async function ghRestList(repo) {
     }));
 }
 
-export async function intakeFromGitHub(ghCfg, { cliListImpl = ghCliList, restListImpl = ghRestList } = {}) {
+export async function intakeFromGitHub(ghCfg, { cliListImpl = ghCliList, restListImpl = ghRestList, token = null } = {}) {
   const out = [];
   for (const entry of ghCfg.repos || []) {
     const repo = normalizeGitHubRepo(entry);
@@ -210,7 +212,7 @@ export async function intakeFromGitHub(ghCfg, { cliListImpl = ghCliList, restLis
     try {
       issues = await cliListImpl(repo);
     } catch {
-      issues = await restListImpl(repo); // unauthenticated works for public repos
+      issues = await restListImpl(repo, token); // falls back to GITHUB_TOKEN / session token / anonymous for public repos
     }
     for (const i of issues) {
       const labels = (i.labels || []).map(label => typeof label === "string" ? label : label?.name).filter(Boolean);
@@ -300,12 +302,12 @@ export async function intakeFromAzure(cfg, { requestImpl = requestJson, token: p
 const jiraText = (value) => typeof value === "string" ? value : value && typeof value === "object"
   ? [value.text, ...(value.content || []).map(jiraText)].filter(Boolean).join(" ") : "";
 
-export async function intakeFromJira(cfg, { fetchImpl = globalThis.fetch } = {}) {
+export async function intakeFromJira(cfg, { fetchImpl = globalThis.fetch, token: suppliedToken } = {}) {
   const base = new URL(String(cfg.base_url || ""));
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) throw new IntakeError("Jira base URL must be a plain HTTPS URL");
   const projects = (cfg.projects || []).map((key) => String(key).trim().toUpperCase()).filter((key) => /^[A-Z][A-Z0-9_]{1,19}$/.test(key));
   if (!projects.length) throw new IntakeError("Choose at least one Jira project key");
-  const tokenEnv = cfg.token_env || "JIRA_TOKEN", token = process.env[tokenEnv];
+  const tokenEnv = cfg.token_env || "JIRA_TOKEN", token = suppliedToken || process.env[tokenEnv];
   if (!token) throw new IntakeError(`Jira intake needs ${tokenEnv} in the server environment`);
   const jql = `project in (${projects.join(",")}) AND statusCategory != Done ORDER BY updated DESC`;
   const url = new URL("rest/api/2/search", base.href.endsWith("/") ? base : `${base.href}/`);
@@ -318,7 +320,7 @@ export async function intakeFromJira(cfg, { fetchImpl = globalThis.fetch } = {})
     const fields = issue.fields || {}, description = jiraText(fields.description).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
     const issueUrl = new URL(`browse/${encodeURIComponent(issue.key)}`, base.href.endsWith("/") ? base : `${base.href}/`).href;
     return { title: `${issue.key} ${fields.summary || "Untitled issue"}`, objective_hint: description.slice(0, 800), completion_checks: [],
-      priority: normalizePriority(fields.priority?.name || ""), risk: "normal", labels: (fields.labels || []).map(String),
+      priority: normalizePriority(fields.priority?.name || ""), risk: "normal", labels: (fields.labels || []).map(String), state: fields.status?.name || "Open",
       source: { type: "jira", url: issueUrl, thread: issueUrl, base_url: base.href.replace(/\/$/, ""), remote_id: issue.key, revision: fields.updated || null, excerpt: description.slice(0, 300) },
       resources: extractResources(description, { source: "jira", baseUrl: issueUrl }), intake_key: `jira:${base.host}:${issue.key}` };
   });

@@ -150,7 +150,7 @@ function AtlPanel() {
         submit(entry);
       } }, entry))) : null,
       h("label", { htmlFor: "atl-project", style: { display: "block", marginBottom: 8 } }, "Project directory"),
-      h("input", { id: "atl-project", value: project, onChange: (event) => setProject(event.target.value), placeholder: "C:\\Projects\\my-app", required: true, disabled: busy, style: { width: "100%", padding: 12, border: "1px solid currentColor", borderRadius: 8, background: "transparent", color: "inherit", font: "inherit", marginBottom: 16 } }),
+      h("input", { id: "atl-project", value: project, onChange: (event) => setProject(event.target.value), placeholder: "${PROJECTS}", required: true, disabled: busy, style: { width: "100%", padding: 12, border: "1px solid currentColor", borderRadius: 8, background: "transparent", color: "inherit", font: "inherit", marginBottom: 16 } }),
       h("p", { style: { opacity: 0.75 } }, "ATL keeps its records in one workspace; opening prepares ATL project state and starts no workers. Your workspace reopens automatically \u2014 register other repositories on the Projects page."),
       h("button", { type: "submit", disabled: busy || !project.trim(), style: buttonStyle }, busy ? "Opening\u2026" : "Open Control Plane"),
       error ? h("p", { role: "alert" }, error) : null

@@ -244,6 +244,7 @@
 .source-branch-box { border: 1px solid var(--border); border-radius: 6px; background: var(--field-bg); padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; }
 .source-branch-box.is-empty { border-style: dashed; color: var(--muted); font-size: 11px; }
 .source-branch-box > div:first-child { min-width: 0; }
+.source-branch-box > div:first-child > b.truncate { display: block; }
 .source-branch-box .bar { justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .source-branch-task { display: flex; gap: 6px; align-items: center; font-size: 10.5px; color: var(--muted); min-width: 0; }
 .source-branch-actions { flex-wrap: wrap; gap: 7px; }
@@ -259,3 +260,36 @@
   .workmap-planbox, .workmap-needbox { margin-inline-start: 0; }
   .workmap-assign select.input { flex: 1 1 110px; }
 }
+// Saved-connection cards, menus and notices render through theme tokens so
+// dark mode and RTL stay legible: the palette this block first shipped with
+// was light-only, and `var(--line, #dcddec)` always took the fallback because
+// no --line token exists (themes define --border/--surface/--row-line).
+.source-v2 .source-connection-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 16px; border: 1px solid var(--green-edge); background: var(--green-bg); color: var(--green); border-radius: 9px; padding: 12px 16px; }
+.source-v2 .source-connection-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; padding: 16px; }
+.source-v2 .source-connection-card { border: 1px solid var(--border); border-radius: 11px; padding: 14px; background: var(--surface); min-width: 0; }
+.source-v2 .source-connection-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
+.source-v2 .source-connection-heading { display: flex; align-items: center; gap: 10px; }
+.source-v2 .source-connection-heading h3 { margin: 0; font-size: 14px; }
+.source-v2 .source-connection-heading .source-status { margin-inline-start: auto; white-space: nowrap; }
+.source-v2 .source-connection-location { overflow-wrap: anywhere; padding-block: 12px; margin: 8px 0; border-block: 1px solid var(--row-line); font-size: 12px; }
+.source-v2 .source-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.source-v2 .source-card-menu { margin-inline-start: auto; position: relative; }
+.source-v2 .source-card-menu summary { cursor: pointer; list-style: none; border: 1px solid var(--border); border-radius: 7px; padding: 7px 11px; line-height: 1.2; }
+.source-v2 .source-card-menu summary::-webkit-details-marker { display: none; }
+// inset-inline-end anchors the menu to the card's reading edge under RTL.
+.source-v2 .source-card-menu > div { position: absolute; z-index: 5; inset-inline-end: 0; top: calc(100% + 4px); min-width: 170px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 12px 26px var(--dialog-shadow); display: grid; }
+.source-v2 .source-card-menu button { text-align: start; justify-content: start; }
+// The kebab menu on a saved-connection card opens past the panel's bottom
+// edge, and .panel's overflow:hidden (kept for its rounded corners) sliced
+// the menu mid-item — "Remove connection" was unreachable on the last row.
+// Precedent: .tasks-shell{overflow:visible} in _app.scss. The panel title
+// keeps the panel's corner rounding so the raised band stays inside it.
+.source-workbench:has(.source-connection-grid) { overflow: visible; }
+.source-workbench:has(.source-connection-grid) > .paneltitle { border-start-start-radius: 11px; border-start-end-radius: 11px; }
+.source-v2 .source-browse-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; }
+.source-v2 .source-browse-controls .source-field { flex: 1 1 190px; min-width: 160px; }
+.source-v2 .source-toolbar { padding: 12px 16px; }
+.source-provider-tabs { display: flex; gap: 8px; margin: 12px 0 18px; }
+.dialogbody .source-field { display: block; margin-block: 12px; }
+.source-form-error { color: var(--red); min-height: 1.4em; margin: 10px 0 0; }
+@media (max-width: 620px) { .source-v2 .source-connection-grid { grid-template-columns: 1fr; } .source-v2 .source-connection-heading { flex-wrap: wrap; } .source-provider-tabs { flex-wrap: wrap; } }

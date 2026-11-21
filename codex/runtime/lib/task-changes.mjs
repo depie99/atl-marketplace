@@ -4,25 +4,31 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 export const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
-export const LIMITS = Object.freeze({ page: 100, text: 1024 * 1024, patch: 256 * 1024, lines: 20000, cells: 2_000_000, milliseconds: 5000 });
+export const LIMITS = Object.freeze({ page: 100, text: 1024 * 1024, patch: 256 * 1024, lines: 20000, cells: 2_000_000, milliseconds: 5000, statMilliseconds: 2500 });
 export class ChangeReviewError extends Error {
   constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; }
 }
 export function safePath(base, relative) {
   if (typeof relative !== "string" || !relative || /[\\\x00-\x1f]/.test(relative) || path.posix.isAbsolute(relative) || /^[A-Za-z]:/.test(relative) || relative.split("/").some((part) => !part || part === "." || part === "..")) throw new ChangeReviewError("unsafe_path", "Unsafe record path");
-  const resolved = path.resolve(base, ...relative.split("/"));
-  // Check the entire ancestor chain, including the store itself (Windows junctions too).
-  for (let cursor = resolved; ; cursor = path.dirname(cursor)) {
+  // Canonicalize the store base once: system-level links above the store
+  // (macOS /var -> /private/var) are not escapes and would otherwise make
+  // every tmpdir-backed store unreadable on macOS. Everything below the
+  // canonical store must still be symlink-free, junctions included.
+  let store;
+  try { store = fs.realpathSync(base); } catch { store = path.resolve(base); }
+  const resolved = path.resolve(store, ...relative.split("/"));
+  for (let cursor = resolved; cursor !== store; cursor = path.dirname(cursor)) {
     if (fs.lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) throw new ChangeReviewError("unsafe_path", "Symlinked inspection path is unavailable");
-    if (path.dirname(cursor) === cursor) break;
   }
   return resolved;
 }
 export function validateSnapshot(snapshot) {
   if (!snapshot || !snapshot.files || !snapshot.modes || Array.isArray(snapshot.files) || Array.isArray(snapshot.modes) || Object.keys(snapshot.files).length > 100000 || digest(JSON.stringify({ files: snapshot.files, modes: snapshot.modes })) !== snapshot.revision) throw new ChangeReviewError("corrupt_manifest", "Snapshot manifest is corrupt", 409);
+  // 120000 is git's symlink mode: with core.symlinks=false Windows checks the
+  // link out as a plain file holding its target, so captures record it as-is.
   for (const [name, hash] of Object.entries(snapshot.files)) {
     safePath(".", name);
-    if (!/^[a-f0-9]{64}$/.test(hash) || !["100644", "100755"].includes(snapshot.modes[name])) throw new ChangeReviewError("corrupt_manifest", "Invalid snapshot entry", 409);
+    if (!/^[a-f0-9]{64}$/.test(hash) || !["100644", "100755", "120000"].includes(snapshot.modes[name])) throw new ChangeReviewError("corrupt_manifest", "Invalid snapshot entry", 409);
   }
   return snapshot;
 }
@@ -53,7 +59,7 @@ const sensitiveText = (text) => /-----BEGIN [\w ]*PRIVATE KEY-----|(?:api[_-]?ke
 
 // Bounded line LCS, after removing common prefix/suffix. Large unrelated edits
 // return an explicit limit state rather than freezing the control plane.
-export function unifiedDiff(before, after, name) {
+export function unifiedDiff(before, after, name, { milliseconds = LIMITS.milliseconds, cells = LIMITS.cells } = {}) {
   const started = performance.now();
   const lines = (text) => text === "" ? [] : text.replace(/\n$/, "").split("\n");
   const a = lines(before), b = lines(after);
@@ -62,10 +68,10 @@ export function unifiedDiff(before, after, name) {
   while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++;
   while (suffix < a.length - prefix && suffix < b.length - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
   const x = a.slice(prefix, a.length - suffix), y = b.slice(prefix, b.length - suffix);
-  if ((x.length + 1) * (y.length + 1) > LIMITS.cells) return { availability: "diff_limit", truncated: true, patch: "", additions: null, deletions: null };
+  if ((x.length + 1) * (y.length + 1) > cells) return { availability: "diff_limit", truncated: true, patch: "", additions: null, deletions: null };
   const width = y.length + 1, table = new Uint32Array((x.length + 1) * width);
   for (let i = x.length - 1; i >= 0; i--) {
-    if (performance.now() - started > LIMITS.milliseconds) return { availability: "timeout", truncated: true, patch: "", additions: null, deletions: null };
+    if (performance.now() - started > milliseconds) return { availability: "timeout", truncated: true, patch: "", additions: null, deletions: null };
     for (let j = y.length - 1; j >= 0; j--) table[i * width + j] = x[i] === y[j] ? 1 + table[(i + 1) * width + j + 1] : Math.max(table[(i + 1) * width + j], table[i * width + j + 1]);
   }
   const ops = a.slice(0, prefix).map((text) => [" ", text]);
@@ -102,7 +108,7 @@ export function unifiedDiff(before, after, name) {
   if (Buffer.byteLength(patch) > LIMITS.patch) return { availability: "patch_limit", truncated: true, patch: "", additions, deletions };
   return { availability: "available", truncated: false, patch, additions, deletions };
 }
-export function fileDiff(root, record, fileId) {
+export function fileDiff(root, record, fileId, options = {}) {
   const file = compareSnapshots(record.baseline, record.output).find((entry) => entry.id === fileId);
   if (!file) throw new ChangeReviewError("file_not_found", "File does not belong to this change set", 404);
   if (sensitivePath(file.path)) return { file, availability: "redacted", patch: "", truncated: false, complete: false };
@@ -113,7 +119,7 @@ export function fileDiff(root, record, fileId) {
     let a, b;
     try { a = decode.decode(before); b = decode.decode(after); } catch { return { file, availability: "binary", patch: "", complete: false }; }
     if (sensitiveText(a) || sensitiveText(b)) return { file, availability: "redacted", patch: "", complete: false };
-    const diff = unifiedDiff(a, b, file.path);
+    const diff = unifiedDiff(a, b, file.path, options);
     return { file, ...diff, complete: diff.availability === "available", mode_change: file.before_mode !== file.after_mode };
   } catch (error) {
     if (!(error instanceof ChangeReviewError)) throw error;
@@ -128,8 +134,24 @@ export function evidenceFor(task, record) {
     return { ...entry, id: `evidence-${digest(JSON.stringify([task.id, index, entry.at, entry.session_id, entry.kind, entry.code_revision, entry.packet_revision])).slice(0, 20)}`, freshness, revision_match: { packet: entry.packet_revision == null ? "missing" : packetMismatch ? "different" : "matches", code: !entry.code_revision ? "missing" : codeMismatch ? "different" : "matches" } };
   });
 }
-export function describeChanges(task, record, { cursor = 0, limit = LIMITS.page } = {}) {
-  const files = compareSnapshots(record.baseline, record.output), evidence = evidenceFor(task, record), attention = [];
+// Change-set records are content-addressed and their blobs are immutable, so
+// per-file line counts are a pure function of (record, file). Caching keeps
+// the chart stable under server load instead of re-cutting the compute budget
+// at different files on every open.
+const statCache = new Map();
+function fileStatCached(root, record, file) {
+  const key = `${record.id}:${file.id}`;
+  if (statCache.has(key)) return statCache.get(key);
+  const diff = fileDiff(root, record, file.id);
+  const stat = { additions: diff.additions ?? null, deletions: diff.deletions ?? null, availability: diff.availability };
+  if (statCache.size >= 4000) statCache.delete(statCache.keys().next().value);
+  statCache.set(key, stat);
+  return stat;
+}
+export function describeChanges(task, record, { cursor = 0, limit = LIMITS.page, root = null, query = "", kind = "all" } = {}) {
+  const allFiles = compareSnapshots(record.baseline, record.output);
+  const files = allFiles.filter((file) => file.path.toLowerCase().includes(String(query).toLowerCase()) && (kind === "all" || file.kind === kind));
+  const evidence = evidenceFor(task, record), attention = [];
   const artifacts = evidence.filter((entry) => entry.artifact_hash).map((entry) => ({ id: `artifact-${digest(String(entry.artifact_hash)).slice(0, 20)}`, hash: entry.artifact_hash, evidence_id: entry.id, code_revision: entry.code_revision || null, packet_revision: entry.packet_revision ?? null, availability: "reference_only" }));
   const add = (code, reason) => attention.push({ id: code, code, reason });
   if (["blocked", "escalated"].includes(task.status)) add("blocked", task.blocker?.reason || `Task is ${task.status}`);
@@ -139,5 +161,17 @@ export function describeChanges(task, record, { cursor = 0, limit = LIMITS.page 
   if (current.some((entry) => entry.result === "fail" || entry.coverage === "partial")) add("failed_evidence", "Current evidence includes failed or incomplete observations");
   if (!current.some((entry) => entry.kind === "review" && entry.result === "approve")) add("review_missing", "No approval review for this exact revision");
   const offset = Math.max(0, Number.isSafeInteger(Number(cursor)) ? Number(cursor) : 0), size = Math.max(1, Math.min(LIMITS.page, Math.floor(Number(limit)) || LIMITS.page));
-  return { version: 1, capability: "task-change-review-v1", availability: "available", id: record.id, task_id: task.id, title: task.title || "", objective: task.objective || "", summary: task.last_checkpoint?.note || task.evidence?.at(-1)?.detail || null, status: task.status, captured_status: record.captured_status || null, packet_revision: record.packet_revision, captured_at: record.captured_at, source_kind: record.source_kind, run_id: record.run_id || null, baseline_revision: record.baseline.revision, output_revision: record.output.revision, input_revisions: record.input_revisions || {}, evidence, artifacts, attention, decisions: [], decisions_availability: "unavailable", total_files: files.length, additions: null, deletions: null, files: files.slice(offset, offset + size), next_cursor: offset + size < files.length ? offset + size : null, preview_complete: false };
+  // Line counts for the change chart. Bounded: files past the budget keep
+  // null counts instead of stalling the control plane.
+  const stats = new Map();
+  const started = performance.now();
+  if (root) for (const file of files.slice(offset, offset + size)) {
+    if (performance.now() - started > LIMITS.statMilliseconds) break;
+    stats.set(file.id, fileStatCached(root, record, file));
+  }
+  const withStats = files.slice(offset, offset + size).map((file) => ({ ...file, ...(stats.get(file.id) || { additions: null, deletions: null }) }));
+  const computed = [...stats.values()].filter((stat) => stat.additions != null && stat.deletions != null);
+  const additions = computed.length ? computed.reduce((sum, stat) => sum + stat.additions, 0) : null;
+  const deletions = computed.length ? computed.reduce((sum, stat) => sum + stat.deletions, 0) : null;
+  return { version: 1, capability: "task-change-review-v1", availability: "available", id: record.id, task_id: task.id, title: task.title || "", objective: task.objective || "", summary: task.last_checkpoint?.note || task.evidence?.at(-1)?.detail || null, status: task.status, captured_status: record.captured_status || null, packet_revision: record.packet_revision, captured_at: record.captured_at, source_kind: record.source_kind, run_id: record.run_id || null, baseline_revision: record.baseline.revision, output_revision: record.output.revision, input_revisions: record.input_revisions || {}, repository: task.repository_name || null, workspace: task.workspace || null, evidence, artifacts, attention, decisions: [], decisions_availability: "unavailable", total_files: allFiles.length, matching_files: files.length, query: String(query), filter: kind, additions, deletions, stats_complete: files.length > 0 && computed.length === Math.min(size, files.length) && offset + size >= files.length, files: withStats, next_cursor: offset + size < files.length ? offset + size : null, preview_complete: false };
 }

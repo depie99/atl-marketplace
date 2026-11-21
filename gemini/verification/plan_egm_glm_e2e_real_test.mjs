@@ -13,8 +13,8 @@ import { startControlPlaneServer } from "../runtime/lib/control-plane-server.mjs
 const skip = process.env.ATL_EGM_GLM_E2E !== "1";
 if (skip) { console.log("SKIP: set ATL_EGM_GLM_E2E=1 to run the real GLM end-to-end test"); process.exit(0); }
 
-const root = process.env.ATL_EGM_GLM_E2E_ROOT || "D:/Projects/Agentic/.atl-evidence/egm-compatibility-20261103/glm-e2e-root".replaceAll("/", path.sep);
-const provider = process.env.ATL_EGM_GLM_PROVIDER || "solico-glm";
+const root = process.env.ATL_EGM_GLM_E2E_ROOT || "${PROJECTS}/.atl-evidence/egm-compatibility-20261103/glm-e2e-root".replaceAll("/", path.sep);
+const provider = process.env.ATL_EGM_GLM_PROVIDER || "example-org-glm";
 
 fs.mkdirSync(path.join(root, "config"), { recursive: true });
 fs.mkdirSync(path.join(root, ".trust", "manager"), { recursive: true });

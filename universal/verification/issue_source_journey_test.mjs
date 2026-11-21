@@ -23,10 +23,10 @@ let server;
 try{
  const running=await startControlPlaneServer(root,{intakeAdapters:adapters});server=running.server;
  const post=async (endpoint,body)=>{const response=await fetch(running.url+endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:response.status,...await response.json()};};
- assert.equal((await post('api/intake/sources',{source:'jira',enabled:true,base_url:'https://servicedesk.solico-group.com',projects:'IT, IS',token_env:'JIRA_TOKEN'})).ok,true);
+ assert.equal((await post('api/intake/sources',{source:'jira',enabled:true,base_url:'https://servicedesk.example-org.com',projects:'IT, IS',token_env:'JIRA_TOKEN'})).ok,true);
  assert.equal((await post('api/intake/sources',{source:'github',enabled:true,repos:'example/demo'})).ok,true);
  const jira=await post('api/intake/preview',{source:'jira'});assert.equal(jira.candidates.length,2);assert.equal(calls.length,1);
- assert.match(calls[0].url,/servicedesk\.solico-group\.com\/rest\/api\/2\/search/);
+ assert.match(calls[0].url,/servicedesk\.example-org\.com\/rest\/api\/2\/search/);
  assert.equal(calls[0].authorization,'Bearer synthetic-test-token');
  const invalid=await post('api/intake/import',{token:'bad',indices:[0],queueId:'jira-intake'});assert.equal(invalid.status,400);
  const imported=await post('api/intake/import',{token:jira.token,indices:[0,1],queueId:'jira-intake'});assert.equal(imported.added,2);

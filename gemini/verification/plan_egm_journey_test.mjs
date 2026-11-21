@@ -41,6 +41,7 @@ Replace vague terms with observable behavior.
 
 let mode = "blocked";
 const planningInvoke = async ({ request }) => {
+  if (request.accuracy_context) return { code: 1, providerFailure: { reason: 'Fixture intentionally retains unresolved deep-review concerns' } };
   if (request.review) return { code: 0, provider: "test", model: "test-model", text: JSON.stringify({ verdict: "passed", findings: [] }) };
   return { code: 0, provider: "test", model: "test-model", text: JSON.stringify({ plan_contract_version: 2, title: "Search project rooms", objective: request.intent, requirements: [{ id: "r1", text: "Search filters by repository name", source: "original request" }], constraints: [], observed_evidence: [{ description: "Verifier", path: "test/search.mjs" }], assumptions: [], open_questions: [], risks: [], completion_checks: ["Search filters by repository name"], acceptance_examples: [{ given: "two repositories", when: "the user searches Alpha", then: "only Alpha is shown" }], selected_skills: ["atl-implement"], skill_route: [], proposed_worker: "pip", implementation_steps: [{ step: "Implement search", files: ["test/search.mjs"], verify: "node test/search.mjs" }], verifier_commands: ["node test/search.mjs"], task_proposals: [{ id: "p1", title: "Implement repository search", objective: request.intent, instructions: "Add repository name filtering with bounded scope.", deliverables: ["search behavior"], requirement_ids: ["r1"], completion_checks: ["node test/search.mjs"], proposed_worker: "pip", selected_skills: ["atl-implement"], skill_reasons: { "atl-implement": "Implements the bounded behavior." }, depends_on: [], files: ["test/search.mjs"], verify: "node test/search.mjs" }] }) };
 };
@@ -67,27 +68,34 @@ try {
   await page.locator('#fDesc').fill("Filter repositories by name. Preserve deletion behavior.");
   await page.getByRole("button", { name: "Create task", exact: true }).click();
   await page.getByText("Search project rooms", { exact: true }).first().click();
-  await page.getByRole("button", { name: "Actions", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
   await page.getByRole("button", { name: "Plan task", exact: true }).click();
   await page.locator("#goal").waitFor();
   await page.locator("#goal").fill("Filter repositories by name. Preserve deletion behavior.");
+  // The planning mode lives in the composer's settings popover in the
+  // conversational split workspace; open it before choosing a mode.
+  await page.locator('.studio-settings > summary').click();
   await page.getByRole("button", { name: "Generate with model", exact: true }).click();
   await page.locator('button[data-action="generate"]').last().click();
   await page.getByText("Model plan ready", { exact: false }).waitFor();  await page.getByText("Model plan ready", { exact: false }).waitFor();
 
-  // Pick the deep review depth; the run button relabels accordingly.
+  // The plan opens in the Tasks tab; review controls live in the Review tab.
+  await page.locator('.planpane-tabs [data-action="studio-plantab:review"]').click();
+
+  // Pick the deep review depth; the run button stays generic.
   await page.locator("#reviewKindSelect").selectOption("egm");
   let reviewResponse = page.waitForResponse((r) => r.url().includes("/api/plan/review"));
-  await page.getByRole("button", { name: "Run EGM deep review" }).click();
+  await page.getByRole("button", { name: "Run review" }).click();
   const blockedResponse = await reviewResponse;
   const blockedBody = await blockedResponse.json();
   assert.equal(blockedResponse.status(), 200, `blocked deep review HTTP: ${JSON.stringify(blockedBody).slice(0, 300)}`);
 
   // Scenario A: blocked deep review keeps the approval gate shut.
-  await page.getByText(`EGM deep review ${blockedBody.review.verdict}`, { exact: false }).waitFor();
-  await page.getByText("EGM deep review (glm-goldfish · 5ba5afa", { exact: false }).waitFor();
+  await page.getByRole("heading", { name: "Continue the review conversation" }).waitFor();
+  await page.locator(".review-verdict").filter({ hasText: "Continue planning" }).waitFor();
   await page.getByText("A1 — Strengthen the verifier", { exact: false }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Approve → Plan Queue" }).isDisabled(), true, "a blocked deep review keeps the approve button disabled");
+  const approveButton = page.getByRole("region", { name: "Plan review" }).getByRole("button", { name: "Approve → Plan Queue" });
+  assert.equal(await approveButton.isDisabled(), true, "a blocked deep review keeps the approve button disabled");
   const blockedApprove = await page.evaluate(async (draftId) => { const r = await fetch("/api/plan/approve", { method: "POST", headers: { "content-type": "application/json", "x-atl-csrf": document.querySelector('meta[name="atl-csrf"]')?.content || "" }, credentials: "same-origin", body: JSON.stringify({ draftId }) }); return r.status; }, blockedBody.draft.id);
   assert.equal(blockedApprove, 409, "the server still refuses approval after a blocked deep review");
   assert.equal(Object.values(loadState(root).tasks).filter((task) => task.plan_draft_id).length, 0, "a blocked deep review creates no queue tasks");
@@ -95,17 +103,17 @@ try {
   // Scenario B: after a passing deep review the same draft approves.
   mode = "passed";
   reviewResponse = page.waitForResponse((r) => r.url().includes("/api/plan/review"));
-  await page.getByRole("button", { name: "Run EGM deep review" }).click();
+  await page.getByRole("button", { name: "Run review again" }).click();
   const passedResponse = await reviewResponse;
   assert.equal(passedResponse.status(), 200, JSON.stringify(await passedResponse.json()).slice(0, 300));
-  await page.getByText("EGM deep review passed", { exact: false }).waitFor();
-  await page.getByRole("button", { name: "Approve → Plan Queue" }).click();
+  await page.getByText("Review passed", { exact: false }).first().waitFor();
+  await approveButton.click();
   await page.getByText("Plan approved — Plan Queue created").waitFor();
   const tasks = Object.values(loadState(root).tasks).filter((task) => task.plan_draft_id);
   assert.equal(tasks.length, 1, "the passing deep review approves into exactly one queued task");
   assert.equal(tasks[0].status, "new", "approval creates membership only — the queue is not executed");
 
-  console.log("PASS: EGM deep-review journey — depth picker, backend badge, blocked gate, passing approval");
+  console.log("PASS: EGM deep-review journey — depth picker, blocked gate, passing approval");
 } catch (error) {
   failed = error;
   try { await browser.screenshot({ path: path.join(root, "journey-failure.png"), fullPage: true }); } catch { /* diagnostics */ }

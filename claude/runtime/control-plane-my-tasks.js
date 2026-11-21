@@ -66,7 +66,7 @@
     });
     const filter = (name, label, values) => `<label class="mtr-filter"><span class="sr-only">${e(label)}</span><select class="input" data-mtr-filter="${name}" aria-label="${e(label)}"><option value="">${e(label)}</option>${[...new Set(values.filter(Boolean))].sort().map(value => `<option value="${e(value)}" ${preferences[name] === value ? 'selected' : ''}>${e(value)}</option>`).join('')}</select></label>`;
     const progress = data.reviews || {};
-    const loadingHtml = `<section class="panel mtr-empty" role="status">${e(t('Loading assigned tasks…', 'در حال دریافت تسک‌ها…'))}</section>`;
+    const loadingHtml = `<section class="panel pad" role="status"><span class="running-mark" aria-hidden="true"></span><span class="muted">${e(t('Loading assigned tasks…', 'در حال دریافت تسک‌ها…'))}</span></section>`;
     const groups = ['proposed', 'inprogress', 'complete'].map(state => {
       const items = visible.filter(item => item.state_category === state), total = all.filter(item => item.state_category === state).length;
       const limit = preferences.limits[state] || initialLimit();
@@ -105,7 +105,7 @@
   function prepBody() {
     const prep = opened.prep;
     if (!prep) return `<p class="sub" role="status">${e(t('Preparation loads when you open this tab.', 'آماده‌سازی با بازکردن این برگه بارگذاری می‌شود.'))}</p>`;
-    if (prep.loading) return `<p class="sub" role="status">${e(t('Loading preparation…', 'در حال بارگذاری آماده‌سازی…'))}</p>`;
+    if (prep.loading) return `<p class="sub" role="status"><span class="running-mark" aria-hidden="true"></span>${e(t('Loading preparation…', 'در حال بارگذاری آماده‌سازی…'))}</p>`;
     if (prep.error) return `<p class="notice" role="alert">${e(prep.error)}</p><div class="mtr-tools">${ownButton(t('Try again', 'تلاش دوباره'), 'prep-load', 'sm')}</div>`;
     const record = prep.record, draft = prepDraftOf(record);
     const status = `<span class="pill ${prepTone(prep.status)}">${e(prepLabel(prep.status))}</span>`;

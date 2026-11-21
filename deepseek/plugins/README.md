@@ -8,6 +8,12 @@ full browser Control Plane; the host opens the URL or presents a clickable link.
 No separate ATL package installation is required. Node and provider credentials
 remain prerequisites. Opening the interface never authorizes a worker run.
 
+Every harness panel opens the same bundled Control Plane, including the shared
+masked token fields and Show/Hide controls. Provider keys entered from a CLI
+prompt are hidden by default; Ctrl+R temporarily reveals or masks the current
+input. Keep these credential-entry behaviors aligned across hosts when updating
+the runtime.
+
 ZCode (Z.ai) packages declare a persistent `ATL Control Plane` session panel.
 Opening that panel starts the bundled Control Plane for the selected local
 workspace and displays its complete existing UI in the app. No `@` mention,
@@ -41,6 +47,14 @@ release requirements. Contract fixtures and local HTTP tests do not establish
 those host observations.
 
 The full plugin bundles the existing runtime and skills. `scripts/build-plugins.mjs` produces six native host packages and a universal MCP bundle from those sources; it does not install ATL, alter PATH, register a user marketplace, or launch workers. See [plugin setup](../docs/getting-started.md#use-the-complete-plugin) for installation and usage.
+
+## Harness-native planning and programs
+
+When a developer asks to plan work in chat, the current harness assistant authors the plan. Use `atl_plan_context` to inspect the explicit project, repository, branch, source issue and saved clarification preference. Resolve the target from the request and repository evidence, show it in chat, ask only consequential unresolved questions by default, and persist draft revisions with `atl_plan_save` as the conversation progresses. The personal clarification preference is asked once; request and project choices override it. Questions and answers remain in chat and are stored in the same revisioned Plan Studio artifact. Use `atl_plan_review` and `atl_plan_approve` for existing policy review and exact-revision approval. Approval creates queue tasks but does not start workers.
+
+Before execution, present `atl_run_preview` including the selected queue/tasks and limits, then call `atl_run_start` only after approval of that exact preview. The persistent local project daemon owns the run, so closing the harness does not cancel approved work. `atl_run_status` and `atl_program_status` provide durable status. For multi-repository work, approve the program outcome and limits, bind each milestone only to a reviewed queue, and start through `atl_program_start`. If runtime restart leaves dispatch effects uncertain, inspect each affected project and use `atl_program_reconcile` with evidence before authorizing another run. Empty repositories require explicit `atl_project_bootstrap`; it creates only an empty base commit and does not choose a stack or stage developer files.
+
+Execution uses the local backend. `runtime/lib/execution-backend.mjs` defines the boundary a future remote backend must implement for workspace preparation, dispatch, observation, cancellation, reconciliation and artifact retrieval. Remote worker authentication, isolated credentials, network policy, quotas and provisioning are not implemented by this release. CLI users can inspect programs with `atl program list` / `atl program show`; `atl harness <operation> request.json` exposes the shared JSON operations for terminal automation.
 
 ## Connection experience
 

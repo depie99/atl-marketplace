@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { verifyPluginRelease } from './plugin-release.mjs';
+import { ensureDaemon, runtimeIdentity } from './daemon.mjs';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -11,16 +12,41 @@ const bundleRoot = fileURLToPath(new URL('../../', import.meta.url));
 const schema = (properties = {}, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const project = { type: 'string', description: 'Absolute path of the application to manage, explicitly selected by the user. Never the plugin installation directory.' };
 const str = { type: 'string' };
+const harnessTool = (name, description, properties, required = []) => ({ name, description, inputSchema: schema({ project, ...properties }, ['project', ...required]) });
+const revision = { draftId: str, expectedRevision: { type: 'integer', minimum: 1, maximum: 2147483647 } };
+const preference = { type: 'object', properties: { mode: { type: 'string', enum: ['all', 'consequential', 'defaults'] }, scope: { type: 'string', enum: ['personal', 'project', 'request'] } }, additionalProperties: false };
+const confirmation = { confirm: { type: 'boolean' }, idempotencyKey: str };
+const harnessTools = [
+  harnessTool('atl_project_bootstrap', 'Initialize an authorized empty/unborn repository and create an empty local base commit without staging developer files. Requires explicit authorization; does not choose a stack or run workers.', {confirm:{type:'boolean'},branch:str}, ['confirm']),
+  harnessTool('atl_program_save', 'Persist a phased multi-project program with explicit milestone dependencies, acceptance checks and total session/time limits. No execution starts.', { programId: str, expectedRevision: {type:'integer',minimum:1,maximum:2147483647}, program: {type:'object',additionalProperties:true}, reason: str, idempotencyKey: str }, ['program','idempotencyKey']),
+  harnessTool('atl_program_status', 'Read the program morning report, project/task status, consumed sessions and milestones requiring elaboration.', { programId: str }),
+  harnessTool('atl_program_reconcile', 'After a runtime interruption, resolve every uncertain dispatch with inspected evidence as completed, safe-to-retry, or blocked. This never starts work; a later exact run authorization is required.', {programId:str,decisions:{type:'array',items:{type:'object',properties:{dispatchId:str,outcome:{type:'string',enum:['completed','safe-to-retry','blocked']},evidence:str},required:['dispatchId','outcome','evidence'],additionalProperties:false},minItems:1,maxItems:50},confirm:{type:'boolean'}}, ['programId','decisions','confirm']),
+  harnessTool('atl_program_approve', 'Record developer approval of exact program requirements, milestone contracts and aggregate limits. Starts nothing.', {programId:str,expectedRevision:{type:'integer',minimum:1,maximum:2147483647},...confirmation}, ['programId','expectedRevision','confirm','idempotencyKey']),
+  harnessTool('atl_program_bind', 'Attach an already reviewed and approved plan queue to an approved milestone. Each task retains its project identity.', {programId:str,milestoneId:str,draftId:str,replacesDraftId:str,expectedRevision:{type:'integer',minimum:1,maximum:2147483647},reason:str}, ['programId','milestoneId','draftId','expectedRevision']),
+  harnessTool('atl_program_start', 'Start or resume a developer-approved program on the local persistent runtime, within its original aggregate limits. Explicit execution authorization is required.', {programId:str,expectedRevision:{type:'integer',minimum:1,maximum:2147483647},...confirmation}, ['programId','expectedRevision','confirm','idempotencyKey']),
+  harnessTool('atl_program_stop', 'Pause this program and request safe stops for its own active tasks; preserve accounting and unrelated work.', {programId:str}, ['programId']),
+  harnessTool('atl_plan_context', 'Get repository evidence, current plan and clarification preferences for planning in this harness chat. For a program milestone, provide programId, milestoneId and programCoordinator (the coordinator project path returned by program status) to receive readiness and verified predecessor evidence. Save the plan in this target project; bind it later from the coordinator project. If ask_preference is true, ask once and persist the chosen personal preference. Does not invoke a paid planner.', { draftId: str, sourceTaskId: str, repositoryId: str, programId:str, milestoneId:str, programCoordinator:str, preference }),
+  harnessTool('atl_plan_save', 'Persist the current harness assistant plan in shared Plan Studio. Use state=draft for incomplete progress or ready for full contract validation. Never submit author-supplied review evidence. Reuse an idempotency key only for identical content.', { ...revision, intent: str, author: str, artifact: { type: 'object', additionalProperties: true }, state: { type: 'string', enum: ['draft', 'ready'] }, sourceTaskId: str, repositoryId: str, baseBranch: str, issue: str, preference, idempotencyKey: str }, ['author', 'artifact', 'idempotencyKey']),
+  harnessTool('atl_plan_answer', 'Persist a developer answer in the same revisioned Plan Studio artifact. Answers still need the normal review before approval.', { ...revision, questionId: str, answer: str }, ['draftId', 'expectedRevision', 'questionId', 'answer']),
+  harnessTool('atl_plan_review', 'Run the configured ATL reviewer policy for this exact plan revision. This may spend a configured provider session and requires the developer authorization. Never invent a passing review.', { ...revision, provider: str, model: str, reviewType: str, confirm: { type: 'boolean' } }, ['draftId', 'expectedRevision', 'confirm']),
+  harnessTool('atl_plan_approve', 'Approve the developer-approved exact plan revision, creating canonical tasks and a queue idempotently. Does not start execution. Requires a fresh passing policy review.', { ...revision, ...confirmation }, ['draftId', 'expectedRevision', 'confirm', 'idempotencyKey']),
+  harnessTool('atl_run_preview', 'Preview explicit tasks or a queue with bounded time and sessions per task. Return a short-lived exact-content token to present for developer approval. Starts nothing.', { queueId: str, taskIds: { type: 'array', items: str, minItems: 1, maxItems: 128 }, maxMinutes: { type: 'integer', minimum: 1, maximum: 10080 }, maxSessions: { type: 'integer', minimum: 1, maximum: 50 } }, ['maxMinutes', 'maxSessions']),
+  harnessTool('atl_run_start', 'Start the exact developer-approved bounded preview in the persistent project daemon, which outlives harness closure. Never set confirm without developer execution authorization.', { previewToken: str, ...confirmation }, ['previewToken', 'confirm', 'idempotencyKey']),
+  harnessTool('atl_run_status', 'Read live run status and the durable overnight recovery ledger. A running job is not completion evidence.', {}),
+  harnessTool('atl_run_stop', 'Request a safe stop of the current project run without unloading the harness.', {}),
+];
 export const pluginTools = [
+  ...harnessTools,
   ...['search', 'issue', 'comments', 'transitions'].map(operation => ({ name: `atl_jira_${operation}`, description: `Read Jira ${operation} through the configured official Atlassian MCP connection. arguments_json contains tool arguments; the configured site is enforced.`, inputSchema: schema({ project, arguments_json: str }, ['project', 'arguments_json']), readOnly: true })),
   { name: 'atl_jira_preview', description: 'Prepare a Jira comment, edit or transition preview. No remote write occurs. The user must review and approve this exact proposal in ATL My Tasks → Analysis & Jira settings → Review pending actions. Never approve on the user behalf.', inputSchema: schema({ project, operation: str, issue_key: str, changes_json: str }, ['project', 'operation', 'issue_key', 'changes_json']) },
   { name: 'atl_connect', description: 'Open the local ATL connection assistant: choose a harness, copy matching connection settings, switch English/Persian and open a project. No project is initialized until explicitly selected and opened. Returns a browser URL; does not launch workers.', inputSchema: schema() },
   { name: 'atl_start', description: 'Start ATL for the selected application in one step: initialize missing ATL project state, preserve existing state, and return the full Control Plane URL. Use for an authorized setup or open-dashboard request. Does not launch workers.', inputSchema: schema({ project }, ['project']) },
   { name: 'atl_info', description: 'Discover the bundled ATL runtime, skill catalog and usage. Does not initialize projects or install anything.', inputSchema: schema(), readOnly: true },
+  { name: 'atl_review', description: 'Inspect captured task changes and actual execution without starting workers or calling a provider. Return text, JSON or Mermaid. Use expand with an optional fileId and cursor to page through pinned graph details.', inputSchema: schema({ project, taskId: str, format: { type: 'string', enum: ['text', 'json', 'mermaid'] }, captureId: str, fileId: str, cursor: { type: 'integer', minimum: 0 }, expand: { type: 'boolean' } }, ['project', 'taskId']), readOnly: true },
   { name: 'atl_skill', description: 'Read a bundled ATL skill or one of its supporting files. Start with name=atl; follow its workflow and trust gates.', inputSchema: schema({ name: str, file: { ...str, description: 'Path within the skill, default SKILL.md. References are loaded on demand.' } }, ['name']), readOnly: true },
   { name: 'atl_command', description: 'Execute the full bundled ATL CLI in the selected project, without a global atl installation. Pass argv as separate strings (e.g. ["init"], ["compose","--title","Fix login"], ["run",id,"--dry-run"]). Returns a job; poll atl_job until finished. Mutates state, may run providers or external operations depending on argv. Existing ATL and host approval gates apply; never invent user approval or add --confirm on your own.', inputSchema: schema({ project, args: { type: 'array', items: str, minItems: 1, maxItems: 128 }, wait_ms: { type: 'integer', minimum: 0, maximum: 10000 } }, ['project', 'args']) },
-  { name: 'atl_job', description: 'Read output and exit status of a command started in this plugin session. A running job is not completion evidence. Use the Control Plane to stop provider runs safely.', inputSchema: schema({ id: str, wait_ms: { type: 'integer', minimum: 0, maximum: 10000 } }, ['id']), readOnly: true },
-  { name: 'atl_control_plane', description: 'Start or reuse the complete ATL Control Plane for an initialized project. Returns a loopback URL to open in the browser. Does not launch workers. The server lives until the plugin unloads; project state survives.', inputSchema: schema({ project }, ['project']) },
+  { name: 'atl_job', description: 'Read output and exit status of a command started in this plugin session. A running job is not completion evidence. Job handles live in memory for this plugin session only; once 32 exist, the oldest finished handles are dropped and their ids become unknown — durable task state stays in the project. Use the Control Plane to stop provider runs safely.', inputSchema: schema({ id: str, wait_ms: { type: 'integer', minimum: 0, maximum: 10000 } }, ['id']), readOnly: true },
+  { name: 'atl_control_plane', description: 'Start or reuse the complete ATL Control Plane for an initialized project. Returns a loopback URL to open in the browser. Does not launch workers. Runs as the project\'s daemon — the one process that owns project state — and stays up after the plugin unloads (idle exit after ~15 quiet minutes); the URL is stable per project.', inputSchema: schema({ project }, ['project']) },
 ];
 
 function validate(tool, args) {
@@ -30,8 +56,25 @@ function validate(tool, args) {
   for (const [key, value] of Object.entries(args)) {
     const rule = tool.inputSchema.properties[key];
     if (rule.type === 'string' && (typeof value !== 'string' || !value.trim() || value.includes('\0'))) throw new Error(`${key} must be a non-empty string.`);
+    if (rule.type === 'boolean' && typeof value !== 'boolean') throw new Error(`Invalid ${key}.`);
+    if (rule.type === 'object' && (!value || typeof value !== 'object' || Array.isArray(value))) throw new Error(`Invalid ${key}.`);
+    if (rule.enum && !rule.enum.includes(value)) throw new Error(`Invalid ${key}.`);
     if (rule.type === 'integer' && (!Number.isInteger(value) || value < rule.minimum || value > rule.maximum)) throw new Error(`Invalid ${key}.`);
-    if (rule.type === 'array' && (!Array.isArray(value) || value.length < rule.minItems || value.length > rule.maxItems || value.some(v => typeof v !== 'string' || v.includes('\0')))) throw new Error(`Invalid ${key} array.`);
+    if (rule.type === 'array') {
+      const validItems = Array.isArray(value) && value.length >= rule.minItems && value.length <= rule.maxItems && value.every(item => {
+        if (rule.items?.type === 'string') return typeof item === 'string' && !item.includes('\0');
+        if (rule.items?.type === 'object') {
+          if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(name => !Object.hasOwn(rule.items.properties || {}, name))) return false;
+          if ((rule.items.required || []).some(name => !(name in item))) return false;
+          return Object.entries(item).every(([name, field]) => {
+            const spec=rule.items.properties[name];
+            return spec.type==='string' ? typeof field==='string'&&Boolean(field.trim())&&!field.includes('\0') : spec.type==='boolean' ? typeof field==='boolean' : spec.enum ? spec.enum.includes(field) : true;
+          });
+        }
+        return false;
+      });
+      if (!validItems) throw new Error(`Invalid ${key} array.`);
+    }
   }
 }
 
@@ -49,18 +92,30 @@ export function createPluginHost() {
   const packaged = JSON.parse(fs.readFileSync(path.join(bundleRoot, 'package.json'), 'utf8')).name === '@depie99/atl-plugin';
   const release = packaged || fs.existsSync(path.join(bundleRoot, 'atl-release.json')) ? verifyPluginRelease(bundleRoot) : null;
   const jobs = new Map();
-  const servers = new Map();
   const embedToken = randomUUID();
-  // Bumped every time a per-project control plane is spawned. Panel gateways pin
-  // the generation they were built against, so a gateway pinned to a server that
-  // died is recognizable and replaceable instead of being reused forever.
+  // Bumped every time a per-project control plane is started fresh (issue #34
+  // moved servers to a reusable per-project daemon, so this fires only when a
+  // new owner actually starts). Panel gateways pin the generation they were
+  // built against, so a gateway pinned to a server that died is recognizable
+  // and replaceable instead of being reused forever.
   let serverGeneration = 0;
   let closed = false;
   let connectionAssistant;
   const outputLimit = 65536 ;
 
   function snapshot(job) {
-    return { id: job.id, project: job.project, args: job.args, status: job.status, exitCode: job.exitCode, signal: job.signal, stdout: job.stdout, stderr: job.stderr, truncated: job.truncated };
+    const output = key => job[`${key}Head`] + (job.truncated[key] ? "\n… output truncated; beginning and end retained …\n" : "") + job[key];
+    return { id: job.id, project: job.project, args: job.args, status: job.status, exitCode: job.exitCode, signal: job.signal, stdout: output('stdout'), stderr: output('stderr'), truncated: job.truncated.stdout || job.truncated.stderr };
+  }
+  function capture(job, key, chunk) {
+    const text = job[key] + chunk;
+    const half = Math.floor(outputLimit / 2);
+    if (text.length <= outputLimit && !job.truncated[key]) job[key] = text;
+    else {
+      job.truncated[key] = true;
+      if (job[`${key}Head`].length < half) job[`${key}Head`] += text.slice(0, half - job[`${key}Head`].length);
+      job[key] = (job[key] + chunk).slice(-half);
+    }
   }
   async function wait(job, ms = 1000, signal) {
     if (ms && job.status === 'running') {
@@ -80,13 +135,13 @@ export function createPluginHost() {
       jobs.delete(old[0]);
     }
     const child = spawn(process.execPath, [path.join(bundleRoot, 'runtime', 'atl-manager.mjs'), ...args], {
-      cwd: root, env: { ...process.env, ATL_PROJECT: root, ATL_NO_OPEN: '1', ...(interfaceProcess ? { ATL_PLUGIN_EMBED_TOKEN: embedToken } : {}) },
+      cwd: root, env: { ...process.env, ATL_PROJECT: root, ATL_NO_OPEN: '1', ATL_RUNTIME_BUNDLE: bundleRoot, ...(interfaceProcess ? { ATL_PLUGIN_EMBED_TOKEN: embedToken } : {}) },
       shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const job = { id: randomUUID(), project: root, args: [...args], status: 'running', exitCode: null, signal: null, stdout: '', stderr: '', truncated: false, child };
+    const job = { id: randomUUID(), project: root, args: [...args], status: 'running', exitCode: null, signal: null, stdout: '', stderr: '', stdoutHead: '', stderrHead: '', truncated: { stdout: false, stderr: false }, child };
     for (const stream of ['stdout', 'stderr']) {
       child[stream].setEncoding('utf8');
-      child[stream].on('data', chunk => { const value = job[stream] + chunk; job.truncated ||= value.length > outputLimit; job[stream] = value.slice(-outputLimit); });
+      child[stream].on('data', chunk => capture(job, stream, chunk));
     }
     job.done = new Promise(resolve => {
       child.once('error', error => { job.stderr += error.message; });
@@ -133,12 +188,31 @@ export function createPluginHost() {
         throw error;
       }
     }
-    if (name === 'atl_info') return {
-      release: release && { format: release.format, version: release.version, runtimeVersion: release.runtimeVersion, content: { sha256: release.content.sha256 } },
-      version: JSON.parse(fs.readFileSync(path.join(bundleRoot, 'package.json'), 'utf8')).version,
-      skills: fs.readdirSync(path.join(bundleRoot, 'skills')).filter(name => fs.existsSync(path.join(bundleRoot, 'skills', name, 'SKILL.md'))).sort(),
-      instructions: 'Read atl_skill(name="atl") first. For an authorized setup or dashboard request, call atl_start with the absolute application path. All runtime commands use this bundle; no global atl install is required. Provider CLIs/authentication and feature-specific tools still need to be available. Native harness tools do not automatically become unattended ATL workers.',
-    };
+    if (name === 'atl_info') {
+      // Cheap runtime self-check (issue #33): importing the server module
+      // resolves the full runtime import graph; a broken bundle reports
+      // unhealthy with a one-line reason instead of failing at first use.
+      const health = await import('./control-plane-server.mjs')
+        .then(() => ({ healthy: true, error: null }))
+        .catch(error => {
+          const text = String(error?.message || error);
+          const missing = text.match(/Cannot find module '([^']+)'/);
+          return { healthy: false, error: missing ? `missing runtime module: ${missing[1]}` : text.split('\n')[0].slice(0, 200) };
+        });
+      return {
+        release: release && { format: release.format, version: release.version, runtimeVersion: release.runtimeVersion, content: { sha256: release.content.sha256 } },
+        // One runtime (issue #34): the bundle identity matches what `atl
+        // --version` and /api/health report, so mismatches are visible.
+        ...runtimeIdentity(bundleRoot),
+        version: JSON.parse(fs.readFileSync(path.join(bundleRoot, 'package.json'), 'utf8')).version,
+        commit: (() => { try { return JSON.parse(fs.readFileSync(path.join(bundleRoot, 'atl-release.json'), 'utf8')).commit || null; } catch { try { return JSON.parse(fs.readFileSync(path.join(bundleRoot, 'source.json'), 'utf8')).commit || null; } catch { return null; } } })(),
+        runtime: (() => { try { return JSON.parse(fs.readFileSync(path.join(bundleRoot, 'package.json'), 'utf8')).version; } catch { return 'unknown'; } })(),
+        healthy: health.healthy,
+        error: health.error,
+        skills: fs.readdirSync(path.join(bundleRoot, 'skills')).filter(name => fs.existsSync(path.join(bundleRoot, 'skills', name, 'SKILL.md'))).sort(),
+        instructions: 'For planning, keep the conversation in this harness chat: call atl_plan_context with the explicit project, resolve and show the repository and issue target, ask the clarification preference once (default: consequential questions), investigate and persist drafts with atl_plan_save after meaningful changes, then use atl_plan_answer/review/approve. Approval creates the shared Plan Studio queue but starts nothing. Show atl_run_preview and obtain approval of that exact bounded preview before atl_run_start. Use atl_program_* for reviewed multi-project milestones; reconcile interrupted dispatches with evidence before resuming. Read atl_skill(name="atl") first. For setup or a dashboard request, call atl_start with the absolute application path. No global atl install is required. Provider CLIs/authentication and feature-specific tools still need to be available; native harness tools do not automatically become unattended workers.',
+      };
+    }
     if (name === 'atl_skill') {
       if (!/^[a-z0-9][a-z0-9-]*$/.test(args.name)) throw new Error('Invalid skill name.');
       const base = fs.realpathSync(path.join(bundleRoot, 'skills', args.name));
@@ -155,6 +229,21 @@ export function createPluginHost() {
       return wait(job, args.wait_ms, signal);
     }
     const root = projectPath(args.project);
+    if (name === 'atl_review') {
+      const { taskReviewReport } = await import('./command-console.mjs');
+      signal?.throwIfAborted();
+      const format = args.format || 'text';
+      return { project: root, taskId: args.taskId, format, content: taskReviewReport(root, args.taskId, format, { captureId: args.captureId, fileId: args.fileId, cursor: args.cursor, expand: args.expand }) };
+    }
+    if (harnessTools.some(tool => tool.name === name)) {
+      const ui = await call('atl_control_plane', { project: root }, { signal });
+      const { project: ignored, ...payload } = args;
+      const operation = name.slice(4).replace('_', '/');
+      const response = await fetch(new URL(`/api/harness/${operation}`, ui.url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal });
+      const result = await response.json();
+      if (!response.ok || result.ok === false) return { ...result, ok: false, status: response.status };
+      return result;
+    }
     if (name.startsWith('atl_jira_')) {
       const ui = await call('atl_control_plane', { project: root }, { signal });
       const preview = name === 'atl_jira_preview';
@@ -163,6 +252,11 @@ export function createPluginHost() {
       return { ...result, ...(preview ? { next: 'Review and approve this exact action in the ATL browser. No Jira write has been made.' } : {}) };
     }
     if (name === 'atl_start') {
+      const profile = process.env.HOME || process.env.USERPROFILE;
+      const homePath = profile && path.resolve(profile);
+      const dataPath = process.env.ATL_HOME && path.resolve(process.env.ATL_HOME);
+      if (homePath && root === homePath) throw new Error('ATL cannot initialize the home directory as a project. Select an application folder.');
+      if (dataPath && (root === dataPath || root.startsWith(dataPath + path.sep))) throw new Error('ATL install and data directories cannot be managed as projects. Select an application folder.');
       const initialized = fs.existsSync(path.join(root, '.trust', 'manager', 'state.json'));
       if (!initialized) {
         const job = command(root, ['init']);
@@ -178,44 +272,26 @@ export function createPluginHost() {
     }
     if (name === 'atl_command') {
       const job = command(root, args.args);
-      try { const result = await wait(job, args.wait_ms, signal); signal?.throwIfAborted(); return result; }
+      try { const result = await wait(job, args.wait_ms, signal); signal?.throwIfAborted();
+        // Plugin-facing errors name the plugin path, not raw CLI output (#33).
+        if (result.status === 'failed' && /Run: atl init|No state file|Missing .*manager\.json/i.test(result.stderr || '')) {
+          result.next = 'This project has no ATL state yet. Call atl_start with the project\'s absolute path (it initializes and returns the dashboard URL); then retry this command.';
+        } else if (result.status === 'failed' && /Failed to launch .* ENOENT|spawn .*ENOENT/i.test(result.stderr || '')) {
+          result.next = 'The command referenced a missing executable or path. Check provider installs with atl_command args=["providers"].';
+        }
+        return result;
+      }
       catch (error) { if (signal?.aborted) await stopJob(job); throw error; }
     }
     if (!fs.existsSync(path.join(root, '.trust', 'manager', 'state.json'))) throw new Error('Initialize this project with atl_command args=["init"] first.');
-    // Store the promise before awaiting, so concurrent calls cannot open two servers.
-    let createdUi;
-    if (!servers.has(root)) {
-      // The runtime owns process-global run/abort state. One process per UI
-      // prevents a second project's server from sharing those execution controls.
-      const job = command(root, ['ui', '--host', '127.0.0.1', '--port', '0', '--no-open'], { interfaceProcess: true });
-      createdUi = job;
-      serverGeneration += 1;
-      const pending = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { void stopJob(job); reject(new Error('Control Plane did not start within 15 seconds.')); }, 15000);
-        const observe = () => {
-          const match = job.stdout.match(/ATL browser control plane: (http:\/\/127\.0\.0\.1:\d+\/)/);
-          if (match) { clearTimeout(timer); job.child.stdout.off('data', observe); resolve({ url: match[1] }); }
-        };
-        job.child.stdout.on('data', observe);
-        job.done.then(() => {
-          clearTimeout(timer);
-          reject(new Error(`Control Plane exited: ${job.stderr || job.stdout}`));
-          if (servers.get(root) === pending) servers.delete(root);
-        });
-      });
-      servers.set(root, pending);
-      pending.catch(() => { if (servers.get(root) === pending) servers.delete(root); });
-    }
-    const abort = () => { if (createdUi) void stopJob(createdUi); };
-    signal?.addEventListener('abort', abort, { once: true });
-    try {
-      const running = await servers.get(root);
-      signal?.throwIfAborted();
-      return { project: root, url: running.url, lifetime: 'plugin session' };
-    } catch (error) {
-      if (signal?.aborted && createdUi) await stopJob(createdUi);
-      throw error;
-    } finally { signal?.removeEventListener('abort', abort); }
+    // One state owner (issue #34): reuse or start the per-project daemon and
+    // hand back its stable URL. The daemon outlives this plugin session and
+    // exits by itself after a quiet period. The session's embed token follows
+    // the daemon so panels keep their capability across reuse.
+    const daemon = await ensureDaemon(root, { embedToken });
+    if (!daemon.reused) serverGeneration += 1;
+    signal?.throwIfAborted();
+    return { project: root, url: daemon.url, lifetime: 'project daemon' };
   }
   async function close() {
     if (closed) return;

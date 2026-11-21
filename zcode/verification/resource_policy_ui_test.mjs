@@ -19,6 +19,21 @@ try {
     await page.addInitScript(()=>sessionStorage.setItem('atl-cp-page','settings'));
     await page.goto(started.url);
     await page.locator('#resourceDefault').waitFor();
+    await page.locator('#resourceModels').uncheck();
+    await page.locator('.resource-routes-table').waitFor({state:'hidden'});
+    assert.equal(await page.locator('#resourceCeiling').isVisible(),false,'Manual selection hides automatic route controls');
+    assert.equal(await page.locator('[data-action="resource-add"]').isVisible(),false,'Manual selection hides the add route action');
+    await page.locator('#resourceModels').check();
+    await page.locator('.resource-routes-table').waitFor({state:'visible'});
+    assert.equal(await page.locator('[data-resource-row]').count(),2,'Toggling automatic selection preserves configured routes');
+    const paired=await page.evaluate(()=>{
+      const access=document.querySelector('#settings-access').getBoundingClientRect();
+      const browser=document.querySelector('#settings-browser').getBoundingClientRect();
+      return Math.abs(access.top-browser.top)<2;
+    });
+    assert.equal(paired,viewport.width>1100,'Access cards pair on desktop and stack on mobile');
+    assert.equal(await page.locator('#settings-browser .set-card-sub').count(),1,'Browser access has one card description');
+    assert.equal(await page.locator('#settings-browser .set-card-body > .sub').count(),0,'Browser access controls do not repeat the card description');
     await page.locator('#resourceDefault').fill('9');await page.locator('#resourceMax').fill('18');
     await page.locator('#resourceCeiling').selectOption('standard');
     await page.locator('[data-action="resource-save"]').click();
@@ -34,13 +49,17 @@ try {
     assert.equal((await fetch(started.url+'api/resource-policy').then(r=>r.json())).policy.models[2].tier,'advanced');
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Settings fit the viewport; wide route table scrolls internally');
     const artifactDir=path.join(process.cwd(),'.atl-evidence','resource-policy');fs.mkdirSync(artifactDir,{recursive:true});
-    await page.locator('[data-resource-form]').scrollIntoViewIfNeeded();
+    // No scrollIntoView here: the 2s snapshot render replaces the DOM and can
+    // detach the located node mid-action; the capture below is fullPage.
     await page.screenshot({path:path.join(artifactDir,`settings-${viewport.width}.png`),fullPage:true});
     await page.locator('[data-action="resource-remove:2"]').click();await page.locator('[data-action="resource-save"]').click();
     await page.getByText('Resource policy saved. New sessions use these limits.',{exact:true}).waitFor();
     // Exercise the model planner's automatic option without spending a session.
     await page.evaluate(()=>sessionStorage.setItem('atl-cp-page','studio'));
     await page.locator('[data-page="studio"]:visible').first().click();
+    // The planning mode lives in the composer's settings popover in the
+    // conversational split workspace; open it before choosing a mode.
+    await page.locator('.studio-settings > summary').click();
     await page.locator('[data-action="mode:model"]').click();
     assert.equal(await page.locator('#providerSelect').inputValue(),'auto');
     await page.close();assert.deepEqual(errors,[]);

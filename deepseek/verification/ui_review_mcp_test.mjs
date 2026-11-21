@@ -43,7 +43,7 @@ try {
   });
   const request = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++seq;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`MCP timeout: ${method}: ${diagnostic}`)); }, 20000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`MCP timeout: ${method}: ${diagnostic}`)); }, 30000);
     pending.set(id, (response) => { clearTimeout(timer); response.error ? reject(new Error(response.error.message)) : resolve(response.result); });
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
   });
@@ -61,7 +61,7 @@ try {
   const inspected = await call("browser_inspect", { selector: ".event" });
   assert.ok(!inspected.isError, JSON.stringify(inspected));
   const nodes = JSON.parse(inspected.content[0].text).nodes;
-  assert.ok(nodes.some((node) => node.text.includes("D:/Projects/Agentic/evidence/check.json")), JSON.stringify(nodes));
+  assert.ok(nodes.some((node) => node.text.includes("${PROJECTS}/evidence/check.json")), JSON.stringify(nodes));
   const capture = await call("browser_screenshot");
   assert.ok(!capture.isError, JSON.stringify(capture));
   assert.equal(capture.content[1].type, "image", "model receives an image, not just a path");

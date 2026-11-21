@@ -17,8 +17,8 @@ fs.mkdirSync(codexDir, { recursive: true });
 const codexFile = path.join(codexDir, `rollout-2026-10-21T13-25-44-${codexId}.jsonl`);
 const codexLine = (type, payload, at) => JSON.stringify({ timestamp: at, type, payload });
 fs.writeFileSync(codexFile, [
-  codexLine("session_meta", { session_id: codexId, timestamp: "2026-10-21T09:55:44.192Z", cwd: "D:\\Projects\\Agentic", originator: "Codex Desktop", cli_version: "0.149.1", model_provider: "openai" }, "2026-10-21T09:55:45.634Z"),
-  codexLine("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "<environment_context>\n  <cwd>D:\\Projects\\Agentic</cwd>\n</environment_context>" }] }, "2026-10-21T09:55:50.000Z"),
+  codexLine("session_meta", { session_id: codexId, timestamp: "2026-10-21T09:55:44.192Z", cwd: "${PROJECTS}", originator: "Codex Desktop", cli_version: "0.149.1", model_provider: "openai" }, "2026-10-21T09:55:45.634Z"),
+  codexLine("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "<environment_context>\n  <cwd>${PROJECTS}</cwd>\n</environment_context>" }] }, "2026-10-21T09:55:50.000Z"),
   codexLine("response_item", { type: "message", role: "developer", content: [{ type: "input_text", text: "You are Codex." }] }, "2026-10-21T09:55:51.000Z"),
   codexLine("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "حافظه و تاریخچه بین codex و cli مشترکه؟" }] }, "2026-10-21T09:56:00.000Z"),
   codexLine("response_item", { type: "reasoning", payload_note: "skipped", summary: [] }, "2026-10-21T09:56:05.000Z"),
@@ -59,7 +59,7 @@ assert.equal(rows[0].title, "memory و context بین codex و cli اشتراک 
 assert.equal(rows[0].model, "GLM-5.3-Flash");
 assert.equal(rows[1].source, "codex");
 assert.equal(rows[1].title, "تاریخچه بین codex و cli", "codex title comes from session_index.jsonl");
-assert.equal(rows[1].cwd, "D:\\Projects\\Agentic");
+assert.equal(rows[1].cwd, "${PROJECTS}");
 console.log("PASS: list merges both sources, newest first, with real titles");
 
 const listed = renderHistoryList(rows, { sources });
@@ -71,7 +71,7 @@ console.log("PASS: list renders with numbers and source paths");
 const codexT = await readTranscript({ source: "codex", file: codexFile });
 assert.deepEqual(codexT.messages.map((m) => m.role), ["user", "assistant"], "synthetic and developer messages filtered");
 assert.equal(codexT.messages[0].text, "حافظه و تاریخچه بین codex و cli مشترکه؟");
-assert.equal(codexT.cwd, "D:\\Projects\\Agentic");
+assert.equal(codexT.cwd, "${PROJECTS}");
 const codexRender = renderTranscript(codexT, { width: 90 });
 assert.ok(codexRender.includes("SESSION codex"), "transcript header names the source");
 assert.ok(codexRender.includes("you") && codexRender.includes("agent"), "speaker labels present");

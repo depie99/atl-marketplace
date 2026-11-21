@@ -1,3 +1,9 @@
+import { saveProgram, listPrograms, getProgram, approveProgram, bindProgramMilestone, programReport, beginProgramRun, stopProgramRun, linkProgramTasks, resolveProgramInterruption } from './programs.mjs';
+import { driveProgram, programRunnerActive, resumePersistedPrograms } from './program-runner.mjs';
+import { readOvernightRun } from './launch.mjs';
+import { Readable } from 'node:stream';
+import { harnessPlanContext, saveHarnessPlan, answerHarnessPlan, assertHarnessRevision, repositoryContext, bootstrapRepository, claimPlanApproval } from './harness-planning.mjs';
+import { createRunPreview, consumeRunPreview, markRunPreviewStarted } from './run-authorization.mjs';
 import http from "node:http";
 import { createTaskTriage } from './task-triage.mjs';
 import { createJiraMcp } from './jira-mcp.mjs';
@@ -11,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { createControlPlaneSnapshot } from "./control-plane.mjs";
 import { dispatchTuiCommand } from "./command-console.mjs";
 import { buildLaunchPlan, executeLaunchQueue, globalMaxConcurrent, mergeQueues, multiQueueDryRun, queueDryRun, readManagerConfig, reconcileOvernightRun, readRunLock, requestRunAbort } from "./launch.mjs";
-import { addProposal, addProposalFeedback, editProposal, generateLocalPlan, savePlanDraft, normalizeProposals, loadPlanDraft, listPlanDrafts, archivePlanDraft, repairPlanDraft, planDraftLabel, regenerateProposal, removeProposal, reorderProposals, runPlanProvider, reviewPlanArtifact, answerPlanQuestion, planningEvidence, approvePlanDraft, validatePlanArtifact, validatePlanGrounding, resolvePlanRepository, repositoryStamp, planDraftIndex, requestRepositoryIds } from "./plan-studio.mjs";
+import { addProposal, addProposalFeedback, editProposal, generateLocalPlan, savePlanDraft, normalizeProposals, loadPlanDraft, listPlanDrafts, archivePlanDraft, repairPlanDraft, planDraftLabel, regenerateProposal, removeProposal, reorderProposals, runPlanProvider, reviewPlanArtifact, answerPlanQuestion, answerCandidateQuestion, applyPlanCandidate, discardPlanCandidate, refinePlanDraft, planningEvidence, approvePlanDraft, validatePlanArtifact, validatePlanGrounding, resolvePlanRepository, repositoryStamp, planDraftIndex, requestRepositoryIds } from "./plan-studio.mjs";
 import { invokePlanningProvider } from "./plan-model.mjs";
 import { builtinProviderStatus, discoverProvider, providerProfile, providerNames, resolvePlanningModel } from "./providers.mjs";
 import { getProvider, loadUserProviders, normalizeThinkingLevel, PROVIDER_TEMPLATES, providerChoices, removeProvider, requireReadyProvider, saveUserProviders, templateById, upsertProvider, wireMismatches } from "./userProviders.mjs";
@@ -27,29 +33,33 @@ import { buildDispatchPlan } from "./dispatcher.mjs";
 import { executeSupervisor, requestSupervisorStop } from "./supervisor-runner.mjs";
 import { batchMorningSummary, batchSummary, listBatches, readBatch, reconcileBatch, resumeStoppedBatch, runBatch, startBatch, stopBatchRun, validateBatch } from "./batch-runner.mjs";
 import { latestFailureSignatures, preventionStatus, recoverMemory, selectContext } from "./operational-memory.mjs";
-import { ensureOwnerSession, ownerSessionCookie, validateOwnerSession } from "./session-auth.mjs";
+import { clearOwnerSession, ensureOwnerSession, ownerSessionCookie, rotateOwnerSession, validateOwnerSession } from "./session-auth.mjs";
 import { approveDraftPr, createDeliveryPacket, listDeliveryPackets, taskDeliveryReceiptFromRecord } from "./delivery.mjs";
 import { inspectHandoffChain } from "./handoffs.mjs";
 import { ChangeReviewError, describeChanges, fileDiff } from "./task-changes.mjs";
-import { captureChangeReview, listChangeReviews, readChangeReview, unavailableReview } from "./change-review-store.mjs";
+import { captureChangeReview, listChangeReviews, readChangeReview, unavailableReview, readTaskReviewState, writeTaskReviewState } from "./change-review-store.mjs";
+import { buildExecutionProjection, readImpactChildren } from "./execution-projection.mjs";
 import { taskStatechart } from "./task-statechart.mjs";
 import { createAssistant, assistantContext, assistantMessageDigest, assistantWorkspace } from "./control-assistant.mjs";
 import { previewPlanPublish, publishPlan, verifyImportedSource, refreshImportedAzureSource } from "./plan-publish.mjs";
 import { runEgmReview, runGlmGoldfishReview, readEgmReviewConfig, parseEgmReports, egmReviewBudgetGate } from "./egm-review.mjs";
-import { acquireReviewLock, releaseReviewLock, reviewPolicyCheck } from "./plan-studio.mjs";
+import { acquireReviewLock, releaseReviewLock, reviewPolicyCheck, continueAccuracyConversation, saveQuestionProgress, planReviewSnapshotCurrent, saveCandidateAccuracyReview } from "./plan-studio.mjs";
 import { installSkill, designateSkill } from "./skill-install.mjs";
 import { executionAccess, saveExecutionAccess, probeWorkspaceAccess } from "./execution-access.mjs";
 import { browserAccess, saveBrowserAccess, checkBrowserRuntime } from "./browser-access.mjs";
 import { resourcePolicy, resourceView, saveResourcePolicy, taskResourcePreview, routeTask, assertModelAllowed } from "./resource-policy.mjs";
 import {recordExecution,publishPlanningExecution} from './execution-report.mjs';
 import {recordQuotaFailure, quotaStatus} from './provider-quota.mjs';
-import { runIntake, normalizeGitHubRepo, intakeFromAzure } from './intake.mjs';
+import { resolveTaskRef, qualifyTaskId } from './task-refs.mjs';
+import { runIntake, normalizeGitHubRepo, intakeFromAzure, intakeFromGitHub, intakeFromJira, requestJson } from './intake.mjs';
+import { loadConnections, saveConnections, validateConnection, sameConnection, connectionIdentity } from './issue-connections.mjs';
 import { importCandidates } from './composer.mjs';
 import { queueCreate, queueAdd, loadQueueBook } from './queue.mjs';
-import { azureIdentity, saveAzureConnection, readAzureConnection, forgetAzureConnection } from './azure-connection.mjs';
+import { azureIdentity, saveAzureConnection, readAzureConnection, forgetAzureConnection, dpapiSupported } from './azure-connection.mjs';
 import { createMyTasksEngine } from './my-tasks.mjs';
 import { createMyTasksReviews } from './my-tasks-reviews.mjs';
 import { acquireLease, releaseLease } from './leases.mjs';
+import { runtimeIdentity, canonicalRoot, daemonStatus, grantLeaseRecord, renewLeaseRecord, releaseLeaseRecord, readEmbedToken } from './daemon.mjs';
 import { assertPreparationReady, addManualInvestigation, addPreparationQuestion, answerPreparationQuestion, beginDiscoveryRun, buildDiscoveryPrompt, finishDiscoveryRun, handoffPreparation, parseDiscoveryJson, preparationInventory, preparationSeedContext, preparationView, readPreparation, savePreparationBrief } from './task-preparation.mjs';
 
 const RUNTIME_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -73,16 +83,10 @@ function startBuiltinOperation(id, action, config) {
     args = id === "claude" ? ["auth", "login", "--claudeai"] : ["login"];
   } else if (action === "install") {
     if (id === "gapgpt") {
-      if (process.platform === "win32") {
-        command = "powershell.exe";
-        args = ["-NoProfile", "-NonInteractive", "-Command", "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://gapgpt.app/install.ps1').Content))"];
-      } else {
-        command = "sh";
-        args = ["-c", "curl -fsSL https://gapgpt.app/install.sh | sh"];
-      }
+      throw new Error("GapGPT installation is unavailable until the provider publishes a versioned installer with a verifiable checksum. Install it using the provider's documented release process.");
     } else {
       command = process.platform === "win32" ? "npm.cmd" : "npm";
-      args = ["install", "--global", id === "codex" ? "@openai/codex" : "@anthropic-ai/claude-code"];
+      args = ["install", "--global", `${id === "codex" ? "@openai/codex" : "@anthropic-ai/claude-code"}@${id === "codex" ? "0.169.0" : "2.1.326"}`];
     }
   } else throw new Error("Unknown provider operation");
   const operation = { action, status: "running", message: action === "login" ? "Opening sign-in. Complete the provider's sign-in in your browser." : "Installing provider…", url: null };
@@ -142,6 +146,23 @@ function escapeText(value) {
   return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
+function isLoopbackHost(hostname) {
+  const value = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return value === "localhost" || value === "127.0.0.1" || value === "::1";
+}
+
+function isSameLoopbackOrigin(req, server) {
+  try {
+    const origin = new URL(String(req.headers.origin));
+    const request = new URL(`http://${req.headers.host}`);
+    const address = server.address();
+    return origin.protocol === "http:" && request.protocol === "http:" &&
+      isLoopbackHost(origin.hostname) && isLoopbackHost(request.hostname) &&
+      Number(origin.port || 80) === address.port && Number(request.port || 80) === address.port &&
+      origin.origin === request.origin;
+  } catch { return false; }
+}
+
 function sendHtml(res, root, assetRoot = path.dirname(CONTROL_PLANE_FILE), embedded = false) {
   const source = fs.readFileSync(path.join(assetRoot, "control-plane.html"), "utf8");
   // The downloaded artifact contains its own demo controller. The live ATL
@@ -161,7 +182,14 @@ function sendHtml(res, root, assetRoot = path.dirname(CONTROL_PLANE_FILE), embed
   // them here; the standalone file keeps its mock banner.
   bodyText = bodyText
     .replace("<span>● Interactive mock · No provider calls, skill execution or real ATL actions</span>", `<span>● Live · connected to ${escapeText(path.basename(root))}</span>`)
-    .replace('<span class="pill hotkey">INTERACTIVE DEMO</span>', '<span class="pill hotkey">LIVE</span>');
+    .replace('<span class="pill hotkey">INTERACTIVE DEMO</span>', '<span class="pill hotkey">LIVE</span>')
+    // The sidebar workspace card describes the served project, not the demo
+    // checkout (#32): every surface that reads it (plugin chip included) must
+    // show the real workspace.
+    .replace('<div class="workspace"><div class="row between"><strong>agent-trust-ladder</strong><span class="green">●</span></div><div class="muted tiny">main · control-plane / demo</div></div>', `<div class="workspace"><div class="row between"><strong>${escapeText(path.basename(root))}</strong><span class="green">●</span></div><div class="muted tiny">${escapeText(root)}</div></div>`);
+  // A browser surface opened by the plugin (valid panel capability) presents
+  // the compact plugin layout, exactly like the in-panel app does (#33).
+  if (embedded) bodyText = bodyText.replace('<html lang="en">', '<html lang="en" data-atl-context="plugin">');
   const session = ensureOwnerSession(root);
   bodyText = bodyText.replace("</head>", `<meta name="atl-csrf" content="${escapeText(session.csrf)}"></head>`);
   const body = Buffer.from(bodyText, "utf8");
@@ -228,10 +256,43 @@ function resolvePreviewSafe(root, options) {
   }
 }
 
+// The overnight-run gate serializes planning provider calls (generate,
+// review, regenerate) against queue runs so quota-limited providers are not
+// shared mid-run. Owners who accept sharing the provider with an active run
+// set planning.concurrentWithQueueRun=true in manager settings and the gate
+// stops refusing planning and review calls while a run is active.
+function planningConcurrentAllowed(root) {
+  try { return readManagerConfig(root).planning?.concurrentWithQueueRun === true; } catch { return false; }
+}
 function planningRunActive(root) {
   const lock = readRunLock(root);
   if (!lock?.pid) return false;
   try { process.kill(lock.pid, 0); return true; } catch { return false; }
+}
+
+async function accuracyReviewOnce(root, loaded, payload, seam, { transient = false } = {}) {
+  assertDraftUsesCurrentImportedSource(root, loaded);
+  const repoRoot = resolvePlanRepository(root, loaded).repoRoot;
+  validatePlanArtifact(loaded.artifact);
+  validatePlanGrounding(root, loaded.artifact, { repoRoot });
+  const provider = payload.provider || loaded.provider;
+  const entry = planningEntry(root, payload, loaded.artifact, 'planning-review', provider);
+  const projectEvidence = planningEvidence(root, loaded.artifact, { repoRoot });
+  const sourceRevision = loaded.source_task_id ? await verifyImportedSource(root, loaded.source_task_id, { fetchImpl: seam.publishFetch, azureToken: await seam.azureToken?.() }) : null;
+  const response = await planningCall(seam, entry, { logPath: path.join(loaded.dir, 'review.log'), request: { review: true, task: "Independently review the updated plan. Return JSON {verdict:'passed'|'blocked',findings:[{severity,message,correction}]}. Optional questions with recorded usable defaults do not block approval. Consequential unresolved issues do. Never claim checks ran.", intent: loaded.intent, artifact: loaded.artifact, project_evidence: { ...projectEvidence, external_source: sourceRevision }, required: ['verdict', 'findings'] } });
+  if (!response || response.code !== 0) throw new Error(response?.providerFailure?.reason || 'Accuracy review provider failed');
+  const result = JSON.parse(String(response.text || response.output || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''));
+  if (!['passed', 'blocked'].includes(result.verdict) || !Array.isArray(result.findings)) throw new Error('review response must contain verdict and findings');
+  return reviewPlanArtifact(root, loaded, { ...result, source_revision: sourceRevision, provider: response.provider || provider, model: response.model || payload.model || null }, { expectedRevision: loaded.revision, evidenceSnapshot: projectEvidence, repoRoot, transient });
+}
+
+async function accuracyContinue(root, loaded, payload, seam, questionId = null, target = 'artifact') {
+  const provider = payload.provider || loaded.provider;
+  return continueAccuracyConversation(root, loaded, { questionId, target, provider, model: payload.model || null, invoke: (call) => planningCall(seam, planningEntry(root, payload, loaded.artifact, 'planning', provider), call), review: async (draft) => {
+    if (target !== 'candidate') return accuracyReviewOnce(root, draft, payload, seam);
+    const reviewed = await accuracyReviewOnce(root, { ...draft, artifact: draft.pending_candidate.artifact, review: null }, payload, seam, { transient: true });
+    return saveCandidateAccuracyReview(root, draft, reviewed);
+  } });
 }
 
 // The browser Studio draft response: artifact plus the honest source label.
@@ -589,7 +650,7 @@ async function handlePlanEndpoint(root, res, pathname, req, seam = {}) {
       // and names the real blocker instead of "provider id required".
       try { assertPreparationReady(root, payload.sourceTaskId ? String(payload.sourceTaskId) : null); }
       catch (error) { return json(res, 409, { ok: false, error: error.message, preparation: error.preparation || null }); }
-      if (planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — planning calls wait until the run gate is free" });
+      if (!planningConcurrentAllowed(root) && planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — planning calls wait until the run gate is free (or set planning.concurrentWithQueueRun=true in manager settings)" });
       // Provider-backed generation is always an explicit, bounded spend: the
       // provider must be configured and ready, no queue run may be active,
       // and the call itself is one confirmed planning session with a timeout.
@@ -645,7 +706,7 @@ async function handlePlanEndpoint(root, res, pathname, req, seam = {}) {
         if (!artifact || artifact.plan_contract_version !== 2) return json(res, 409, { ok: false, error: "local skeleton and legacy drafts need a version 2 model plan first — use Complete with model, then review" });
         validatePlanArtifact(artifact);
         validatePlanGrounding(root, artifact, { repoRoot });
-        if (planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — plan review waits until the run gate is free" });
+        if (!planningConcurrentAllowed(root) && planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — plan review waits until the run gate is free (or set planning.concurrentWithQueueRun=true in manager settings)" });
         const config = readEgmReviewConfig(readManagerConfig(root));
         if (!config.enabled) return json(res, 409, { ok: false, error: "EGM deep review is not usable: " + config.problems.join(" ") });
         const egmProviderId = payload.provider || loaded.provider;
@@ -690,7 +751,8 @@ async function handlePlanEndpoint(root, res, pathname, req, seam = {}) {
           throw failure;
         }
         const verdict = parsed.verdictHint === "passed" && !parsed.findings.some((finding) => ["blocker", "major"].includes(finding.severity)) ? "passed" : "blocked";
-        const updated = reviewPlanArtifact(root, loaded, { verdict, findings: parsed.findings, kind: "egm", provider: config.backend === "glm-goldfish" ? ((run.stageRuns || []).map((stage) => stage.provider).find(Boolean) || egmProviderId) : "codex-egm", model: config.model, egm: { backend: config.backend, version_sha: config.versionSha, model: config.model || (run.stageRuns || []).map((stage) => stage.model).find(Boolean) || null, workdir: run.workdir, duration_ms: run.durationMs, exit_code: run.exitCode, last_message: run.lastMessage, stage_runs: run.stageRuns || null } }, { expectedRevision: loaded.revision || 1, evidenceSnapshot: projectEvidence, repoRoot });
+        let updated = reviewPlanArtifact(root, loaded, { verdict, findings: parsed.findings, kind: "egm", provider: config.backend === "glm-goldfish" ? ((run.stageRuns || []).map((stage) => stage.provider).find(Boolean) || egmProviderId) : "codex-egm", model: config.model, egm: { backend: config.backend, version_sha: config.versionSha, model: config.model || (run.stageRuns || []).map((stage) => stage.model).find(Boolean) || null, workdir: run.workdir, duration_ms: run.durationMs, exit_code: run.exitCode, last_message: run.lastMessage, stage_runs: run.stageRuns || null } }, { expectedRevision: loaded.revision || 1, evidenceSnapshot: projectEvidence, repoRoot });
+        if (updated.review.verdict === 'blocked' || updated.accuracy_followup?.status === 'retry') updated = await accuracyContinue(root, updated, payload, seam);
         return json(res, 200, { ok: true, draft: draftResponse(updated, root), review: updated.review });
       } catch (error) { return json(res, error.statusCode || 400, { ok: false, error: error.message, workdir: error.workdir || null }); }
       finally { if (reviewKey) releaseReviewLock(reviewDir); }
@@ -709,7 +771,7 @@ async function handlePlanEndpoint(root, res, pathname, req, seam = {}) {
       validatePlanArtifact(artifact);
       validatePlanGrounding(root, artifact, { repoRoot });
       const entry = planningEntry(root,payload,{...artifact,title:artifact.title||loaded.intent},'planning-review',providerId);
-      if (planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — plan review waits until the run gate is free" });
+      if (!planningConcurrentAllowed(root) && planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — plan review waits until the run gate is free (or set planning.concurrentWithQueueRun=true in manager settings)" });
       acquireReviewLock(loaded.dir);
       reviewKey = "acquired";
       reviewDir = loaded.dir;
@@ -722,16 +784,79 @@ async function handlePlanEndpoint(root, res, pathname, req, seam = {}) {
       const text = String(response.text || response.output || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
       const result = JSON.parse(text);
       if (!["passed", "blocked"].includes(result.verdict) || !Array.isArray(result.findings)) throw new Error("review response must contain verdict and findings");
-      const updated = reviewPlanArtifact(root, loaded, { ...result, source_revision: sourceRevision, provider: response.provider || providerId, model: response.model || payload.model || null }, { expectedRevision: loaded.revision || 1, evidenceSnapshot: projectEvidence, repoRoot });
+      let updated = reviewPlanArtifact(root, loaded, { ...result, source_revision: sourceRevision, provider: response.provider || providerId, model: response.model || payload.model || null }, { expectedRevision: loaded.revision || 1, evidenceSnapshot: projectEvidence, repoRoot });
+      if (updated.review.verdict === 'blocked' || updated.accuracy_followup?.status === 'retry') updated = await accuracyContinue(root, updated, payload, seam);
       return json(res, 200, { ok: true, draft: draftResponse(updated, root), review: updated.review });
     } catch (error) { return json(res, error.statusCode || 400, { ok: false, error: error.message }); }
     finally { if (reviewKey) releaseReviewLock(reviewDir); }
   }
-  if (pathname === "/api/plan/clarify") {
+  if (pathname === "/api/plan/question-progress") {
     try {
-      const updated = answerPlanQuestion(root, String(payload.draftId || ""), String(payload.questionId || ""), payload.answer);
+      const updated = saveQuestionProgress(root, String(payload.draftId || ''), payload.progress, { target: payload.target });
       return json(res, 200, { ok: true, draft: draftResponse(updated, root) });
-    } catch (error) { return json(res, 400, { ok: false, error: error.message }); }
+    } catch (error) { return json(res, error.statusCode || 400, { ok: false, error: error.message }); }
+  }
+  if (pathname === "/api/plan/clarify") {
+    let reviewDir = null;
+    try {
+      const loaded = loadPlanDraft(root, String(payload.draftId || ''));
+      assertDraftUsesCurrentImportedSource(root, loaded);
+      if (payload.revision != null && Number(payload.revision) !== loaded.revision) throw Object.assign(new Error('plan draft changed; reload and retry'), { statusCode: 409 });
+      if (!planningConcurrentAllowed(root) && planningRunActive(root)) throw Object.assign(new Error('An overnight queue run is active; your unfinished answer is retained for later.'), { statusCode: 409 });
+      acquireReviewLock(loaded.dir);
+      reviewDir = loaded.dir;
+      const id = String(payload.questionId || '');
+      const record = payload.target === 'candidate' ? loaded.pending_candidate : loaded;
+      const previous = record?.answer_assessments?.[id];
+      // A duplicate network retry must not spend another provider session.
+      if (previous?.original_answer === String(payload.answer || '').trim() && record?.accuracy_followup?.status === 'complete' && record.accuracy_followup.completed_revision === loaded.revision) return json(res, 200, { ok: true, draft: draftResponse(loaded, root), feedback: previous, review: record.review, review_ready: payload.target !== 'candidate' && planReviewSnapshotCurrent(root, loaded) });
+      let updated = payload.target === 'candidate' ? answerCandidateQuestion(root, loaded, id, payload.answer) : answerPlanQuestion(root, loaded, id, payload.answer, { expectedRevision: payload.revision });
+      updated = await accuracyContinue(root, updated, payload, seam, id, payload.target);
+      const result = payload.target === 'candidate' ? updated.pending_candidate : updated;
+      return json(res, 200, { ok: true, draft: draftResponse(updated, root), feedback: result?.answer_assessments?.[id], review: result?.review || null, review_ready: payload.target !== 'candidate' && planReviewSnapshotCurrent(root, updated) });
+    } catch (error) { return json(res, error.statusCode || 400, { ok: false, error: error.message }); }
+    finally { if (reviewDir) releaseReviewLock(reviewDir); }
+  }
+  if (pathname === "/api/plan/refine") {
+    const draftId = String(payload.draftId || "");
+    const message = String(payload.message || "").trim();
+    if (!draftId) return json(res, 400, { ok: false, error: "refinement needs a draft id" });
+    if (!message) return json(res, 400, { ok: false, error: "refinement needs a message" });
+    try {
+      const loaded = loadPlanDraft(root, draftId);
+      assertDraftUsesCurrentImportedSource(root, loaded);
+      const providerId = payload.provider || loaded.provider;
+      if (!providerId) return json(res, 400, { ok: false, error: "this draft has no retained provider — select one before refining" });
+      if (!planningConcurrentAllowed(root) && planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — planning calls wait until the run gate is free (or set planning.concurrentWithQueueRun=true in manager settings)" });
+      const targetTitle = payload.taskTarget ? (normalizeProposals(loaded.artifact).find((proposal) => proposal.id === String(payload.taskTarget))?.title || loaded.artifact?.title || loaded.intent) : (loaded.artifact?.title || loaded.intent);
+      const entry = planningEntry(root, payload, { title: targetTitle }, "planning", providerId);
+      const updated = await refinePlanDraft(root, draftId, message, {
+        confirm: payload.confirm === true,
+        provider: entry.id,
+        model: payload.model || null,
+        taskTarget: payload.taskTarget ? String(payload.taskTarget) : null,
+        attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+        invoke: (call) => planningCall(seam, entry, call),
+      });
+      return json(res, 200, { ok: true, draft: draftResponse(updated, root) });
+    } catch (error) {
+      return json(res, error.statusCode || 400, { ok: false, error: error.message, providerResponse: error.providerResponse || null, providerLogLines: providerLogTail(error) });
+    }
+  }
+  if (pathname === "/api/plan/candidate") {
+    const draftId = String(payload.draftId || "");
+    if (!draftId) return json(res, 400, { ok: false, error: "a candidate action needs a draft id" });
+    try {
+      if (payload.action === "apply") {
+        const updated = applyPlanCandidate(root, draftId, { expectedRevision: payload.revision == null ? null : Number(payload.revision) });
+        return json(res, 200, { ok: true, draft: draftResponse(updated, root) });
+      }
+      if (payload.action === "discard") {
+        const updated = discardPlanCandidate(root, draftId);
+        return json(res, 200, { ok: true, draft: draftResponse(updated, root) });
+      }
+      return json(res, 400, { ok: false, error: "candidate action must be apply or discard" });
+    } catch (error) { return json(res, error.statusCode || 400, { ok: false, error: error.message }); }
   }
   if (pathname === "/api/plan/publish-preview") {
       try { return json(res, 200, { ok: true, preview: await previewPlanPublish(root, String(payload.draftId || ""), payload.destination || {}, { fetchImpl: seam.publishFetch }) }); }
@@ -748,7 +873,7 @@ async function handlePlanEndpoint(root, res, pathname, req, seam = {}) {
         const reviewed = draft.review?.source_revision || draft.artifact.review?.source_revision;
         if (!reviewed?.current || current.remote_id !== reviewed.remote_id || current.revision !== reviewed.revision) throw new Error("Imported source revision changed after review; reconcile the task and review the plan again");
       }
-      const approved = approvePlanDraft(root, draft, { sourceRevisionCurrent: Boolean(draft.source_task_id) });
+      const approved = approvePlanDraft(root, draft, { sourceRevisionCurrent: Boolean(draft.source_task_id), expectedRevision: payload.expectedRevision });
       return json(res, 200, { ok: true, approved: { queueId: approved.queueId, taskIds: approved.taskIds, created: approved.created, draft: draftResponse(approved.draft, root) } });
     } catch (error) { return json(res, 409, { ok: false, error: error.message }); }
   }
@@ -767,7 +892,7 @@ async function handlePlanEndpoint(root, res, pathname, req, seam = {}) {
       const providerId = payload.provider || loaded.provider;
       if (!providerId) return json(res, 400, { ok: false, error: "this draft has no retained provider — select one before regenerating" });
       const entry = planningEntry(root,payload,normalizeProposals(loaded.artifact).find(p=>p.id===proposalId)||{title:loaded.intent},'planning',providerId);
-      if (planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — planning calls wait until the run gate is free" });
+      if (!planningConcurrentAllowed(root) && planningRunActive(root)) return json(res, 409, { ok: false, error: "an overnight queue run is active — planning calls wait until the run gate is free (or set planning.concurrentWithQueueRun=true in manager settings)" });
       const updated = await regenerateProposal(root, draftId, proposalId, {
         confirm: payload.confirm === true,
         role: "pip",
@@ -873,11 +998,15 @@ async function handleMyTasksEndpoint(root, res, url, req, myTasks, azureToken, r
     if (req.method === "GET" && path === "/api/my-tasks/settings") {
       const tokenInfo = await azureToken();
       const cfg = readManagerConfig(root).intake?.azure || {};
-      json(res, 200, { ok: true, settings: myTasks.settings(), connection: { org_url: cfg.org_url || "", project: cfg.project || "", token_present: Boolean(tokenInfo), remember_supported: process.platform === "win32" } });
+      json(res, 200, { ok: true, settings: myTasks.settings(), connection: { org_url: cfg.org_url || "", project: cfg.project || "", token_present: Boolean(tokenInfo), remember_supported: await dpapiSupported() } });
       return;
     }
     if (req.method === "POST" && path === "/api/my-tasks/settings") {
       const payload = JSON.parse(await readBody(req) || "{}");
+      if (payload.startup_mode === "windows" && process.platform !== "win32") {
+        json(res, 400, { ok: false, error: "Starting My Tasks at login is currently supported on Windows only. Choose runtime startup instead." });
+        return;
+      }
       const previousSettings = myTasks.settings();
       const wasPaused = Boolean(myTasks.status().paused);
       const saved = myTasks.saveSettings({
@@ -1042,13 +1171,54 @@ const stableSnapshotFingerprint = value => {
 
 export function createControlPlaneServer(root, { host = "127.0.0.1", planningInvoke = null, planningRoot = null, usageFetch = globalThis.fetch, publishFetch = globalThis.fetch, assetRoot = path.dirname(CONTROL_PLANE_FILE), readOnlyPreview = false, intakeAdapters = {}, egmRunner = null, myTasksFetch = null, myTasksReviewInvoke = null, taskTriageInvoke = null, jiraTransportCall = null, azureFetch = globalThis.fetch } = {}) {
   if (!new Set(["127.0.0.1", "::1", "localhost"]).has(host)) throw new Error("control plane only supports loopback hosts");
+  // Project identity in every health answer lets clients verify they adopted
+  // the right owner before treating it as the project's daemon (issue #34).
+  const projectIdentity = canonicalRoot(root);
+  const runtime = runtimeIdentity();
+  let lastRequestAt = Date.now();
+  const ownerSession = rotateOwnerSession(root);
   const seam = { planningInvoke, planningRoot: planningRoot || root, usageFetch, publishFetch, intakeAdapters, egmRunner, azureFetch };
   const intakePreviews = new Map();
+  const azureConnectionTokens = new Map();
+  const azureCredentialDir = id => path.join(root, '.trust', 'manager', 'credentials', id);
+  // Warm the DPAPI capability probe so the first settings read does not pay
+  // the PowerShell spawn cost while the user is waiting.
+  void dpapiSupported();
+  // Error text must never echo a credential. Secret sources: the UI-entered
+  // Azure PAT, connection tokens cached in memory, environment values whose
+  // name marks them as credentials, and the current request payload (a
+  // just-entered PAT passed by the caller). Values shorter than 8 characters
+  // are skipped — redacting them would shred the message without protecting
+  // anything. The env scan is cached on the sorted key list so hot error
+  // paths do not rescan process.env on every failure.
+  const redactionCache = { envKeys: null, envSecrets: [] };
+  const redactConnectionSecrets = (value, ...extra) => {
+    let message = String(value ?? '');
+    const envKeys = Object.keys(process.env).sort().join('\u0000');
+    if (redactionCache.envKeys !== envKeys) {
+      redactionCache.envKeys = envKeys;
+      redactionCache.envSecrets = Object.entries(process.env).filter(([key, item]) => item && /(?:PAT|TOKEN|SECRET|CREDENTIAL)/i.test(key)).map(([, item]) => item);
+    }
+    const secrets = [...new Set([azureUiToken, githubUiToken, ...jiraConnectionTokens.values(), ...azureConnectionTokens.values(), ...redactionCache.envSecrets, ...extra])].filter(secret => secret && String(secret).length >= 8);
+    for (const secret of secrets) message = message.split(secret).join('[redacted]');
+    return message;
+  };
+  async function connectionAzureToken(connection) {
+    if (!connection || connection.provider !== 'azure') return null;
+    if (azureConnectionTokens.has(connection.id)) return azureConnectionTokens.get(connection.id);
+    if (connection.credential_ref === 'os-protected') {
+      const token = await readAzureConnection(connection.settings, { dir: azureCredentialDir(connection.id) });
+      if (token) { azureConnectionTokens.set(connection.id, token); return token; }
+    }
+    return process.env[connection.settings.token_env || 'AZDO_PAT'] || null;
+  }
   // UI-entered Azure PATs live only in this server instance's memory. They
   // are never added to process.env, config files, child worker environments,
   // logs, or API responses.
   let azureUiToken = null;
   let azureTokenIdentity = null, azureLoadedIdentity = null, azureRemembered = false;
+  let githubUiToken = null; // session-scoped token from the UI; GITHUB_TOKEN stays untouched
+  const jiraConnectionTokens = new Map(); // session credentials are scoped to saved connections
   async function currentAzureToken() {
     const cfg = readManagerConfig(root).intake?.azure || {}, identity = azureIdentity(cfg);
     if (azureTokenIdentity !== identity) { azureUiToken = null; azureRemembered = false; }
@@ -1158,20 +1328,24 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
     for (const stream of streams) { try { stream.res.write(`event: snapshot\ndata: ${cachedFrame.json}\n\n`); } catch { streams.delete(stream); } }
   }, 2000);
   streamTimer.unref?.();
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     try {
+      lastRequestAt = Date.now();
       const url = new URL(req.url || "/", `http://${host}`);
+      let consumedRunPreview = null;
       if (readOnlyPreview && !["GET", "HEAD", "OPTIONS"].includes(req.method || "GET")) { json(res, 403, { ok: false, error: "Synthetic UI preview is read-only; live task actions are unavailable." }); return; }
       // A browser may only mutate this loopback service from its own origin.
       // Command-line clients have no Origin header and remain supported.
       if (!["GET", "HEAD", "OPTIONS"].includes(req.method || "GET") && req.headers.origin) {
-        const expected = `http://${req.headers.host}`;
-        if (req.headers.origin !== expected) { json(res, 403, { ok: false, error: "cross-origin control-plane mutation refused" }); return; }
+        if (!isSameLoopbackOrigin(req, server)) { json(res, 403, { ok: false, error: "cross-origin control-plane mutation refused" }); return; }
         const token = String(req.headers.cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith("atl_owner="))?.slice("atl_owner=".length);
         if (!validateOwnerSession(root, decodeURIComponent(token || ""), String(req.headers["x-atl-csrf"] || ""))) { json(res, 403, { ok: false, error: "owner session or CSRF token is invalid" }); return; }
       }
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-        const embedToken = process.env.ATL_PLUGIN_EMBED_TOKEN;
+        // Panel capability (issue #34): direct servers keep the env token; a
+        // reused project daemon takes the current session's token from the
+        // owner record instead, because its env predates the session.
+        const embedToken = process.env.ATL_PLUGIN_EMBED_TOKEN || readEmbedToken(root);
         const supplied = url.searchParams.get('atl_embed');
         // A panel receives a process-local capability. Ordinary browser visits
         // retain strict owner cookies; arbitrary query strings cannot relax them.
@@ -1230,24 +1404,39 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         });
         return;
       }
-      if (["/api/task-changes", "/api/task-change-diff", "/api/task-changes/capture"].includes(url.pathname)) {
+      if (["/api/task-changes", "/api/task-change-diff", "/api/task-changes/capture", "/api/task-review-state", "/api/task-impact-children"].includes(url.pathname)) {
         // Source previews require the owner session even on GET, including a
         // CSRF header a cross-origin page cannot obtain through a simple request.
         const token = String(req.headers.cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith("atl_owner="))?.slice("atl_owner=".length);
         if (!validateOwnerSession(root, decodeURIComponent(token || ""), String(req.headers["x-atl-csrf"] || ""))) { json(res, 403, { error: "Owner session is required for source inspection", availability: "forbidden" }); return; }
         try {
           const capture = url.pathname.endsWith("/capture");
+          if (url.pathname === "/api/task-review-state") {
+            if (!(["GET", "PUT"].includes(req.method))) { json(res, 405, { error: "Method not allowed" }); return; }
+            const payload = req.method === "PUT" ? JSON.parse(await readBody(req) || "{}") : null;
+            const taskId = req.method === "PUT" ? payload.task_id : url.searchParams.get("taskId");
+            const state = loadState(root), task = state.tasks[taskId];
+            if (!task) { json(res, 404, { error: "Task not found" }); return; }
+            try {
+              const value = req.method === "GET" ? readTaskReviewState(root, task) : writeTaskReviewState(root, task, payload);
+              json(res, 200, { ok: true, ...value });
+            } catch (error) { json(res, error instanceof ChangeReviewError ? error.status : 409, { ok: false, error: error.message, availability: error.code || "review_state_unavailable" }); }
+            return;
+          }
           if (req.method !== (capture ? "POST" : "GET")) { json(res, 405, { error: "Method not allowed" }); return; }
           const payload = capture ? JSON.parse(await readBody(req) || "{}") : null;
           const taskState = loadState(root);
           const task = taskState.tasks[capture ? payload.task_id : url.searchParams.get("taskId")];
           if (!task) { json(res, 404, { error: "Task not found", availability: "task_missing" }); return; }
+          if (url.pathname === "/api/task-impact-children") {
+            json(res, 200, readImpactChildren(root, task, { captureId: url.searchParams.get("changeSetId"), fileId: url.searchParams.get("fileId"), cursor: url.searchParams.get("cursor") || 0 })); return;
+          }
           const record = capture ? captureChangeReview(root, task) : readChangeReview(root, task, url.searchParams.get("changeSetId"));
           if (url.pathname === "/api/task-change-diff") {
             if (!url.searchParams.get("changeSetId") || !record) throw new ChangeReviewError("change_set_missing", "A pinned change set is required", 400);
             json(res, 200, { change_set_id: record.id, ...fileDiff(root, record, url.searchParams.get("fileId")) }); return;
           }
-          const review = record ? { ...describeChanges(task, record, { cursor: url.searchParams.get("cursor"), limit: url.searchParams.get("limit") }), revisions: listChangeReviews(root, task) } : unavailableReview(task);
+          const review = record ? { ...describeChanges(task, record, { cursor: url.searchParams.get("cursor"), limit: url.searchParams.get("limit"), query: url.searchParams.get("q") || "", kind: url.searchParams.get("kind") || "all", root }), revisions: listChangeReviews(root, task) } : unavailableReview(task);
           const delivery = record ? taskDeliveryReceiptFromRecord(task, record) : null;
           json(res, 200, {
             ...review,
@@ -1257,6 +1446,19 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         } catch (error) {
           json(res, error instanceof ChangeReviewError ? error.status : 409, { error: error instanceof ChangeReviewError ? error.message : "Source inspection failed; no task state was changed", availability: error instanceof ChangeReviewError ? error.code : "inspection_unavailable" });
         }
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/task-execution") {
+        // Same posture as source previews: the projection joins workspace
+        // paths, session log paths and evidence, so the owner session is
+        // required even on GET.
+        const token = String(req.headers.cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith("atl_owner="))?.slice("atl_owner=".length);
+        if (!validateOwnerSession(root, decodeURIComponent(token || ""), String(req.headers["x-atl-csrf"] || ""))) { json(res, 403, { error: "Owner session is required for execution inspection", availability: "forbidden" }); return; }
+        const taskId = String(url.searchParams.get("taskId") || "");
+        const taskState = loadState(root);
+        if (!taskState.tasks[taskId]) { json(res, 404, { error: "Task not found", availability: "task_missing" }); return; }
+        try { json(res, 200, buildExecutionProjection(root, taskId, { state: taskState })); }
+        catch (error) { json(res, 409, { error: "Execution projection failed; no task state was changed", availability: "projection_unavailable", message: error.message }); }
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/task-recovery") {
@@ -1339,7 +1541,8 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
       if (req.method === "POST" && url.pathname === "/api/projects/assign-task") {
         // Direct assignment from a Projects/Issue-sources card: bind an
         // existing task to a repository or create a new task there, so it
-        // plans, verifies and runs against that codebase.
+        // plans, verifies and runs against that codebase. Cross-project
+        // references use the qualified <project>:T-001 form (issue #34).
         try {
           const payload = JSON.parse(await readBody(req) || "{}");
           const project = supervisorSnapshot().projects.find((entry) => entry.id === String(payload.repositoryId || ""));
@@ -1347,7 +1550,12 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           try { fs.realpathSync(project.root); } catch { json(res, 409, { ok: false, error: `Repository "${project.name}" is missing on disk (${project.root}). Fix or re-register it before assigning work.` }); return; }
           const state = loadState(root);
           const title = String(payload.title || "").trim();
-          let task = state.tasks[String(payload.taskId || "")] || null;
+          const reference = resolveTaskRef(root, String(payload.taskId || ""), { projectRoot: root });
+          if (reference?.project && reference.project.root !== fs.realpathSync(root)) {
+            json(res, 400, { ok: false, error: "A qualified <project>:T-001 reference must name this project; this card assigns this project's tasks." });
+            return;
+          }
+          let task = reference?.task || null;
           if (!task && title) task = Object.values(state.tasks).find((entry) => !entry.intake_only && !["archived", "rejected"].includes(entry.status) && entry.title.toLowerCase() === title.toLowerCase()) || null;
           let created = false;
           if (!task) {
@@ -1370,7 +1578,11 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
       }
       if (req.method === "POST" && url.pathname === "/api/supervisor") {
         const payload = JSON.parse(await readBody(req) || "{}"); let result;
-        if (payload.action === "register-project" || payload.action === "register") result = registerProject(String(payload.root || root), payload.project || { name: payload.name, maxConcurrent: payload.maxConcurrent });
+        if (payload.action === "register-project" || payload.action === "register") {
+          if (typeof payload.root !== "string" || !payload.root.trim()) { json(res, 400, { ok: false, error: "project root is required" }); return; }
+          try { result = registerProject(payload.root, payload.project || { name: payload.name, maxConcurrent: payload.maxConcurrent }); }
+          catch (error) { json(res, error.statusCode || 400, { ok: false, error: error.message }); return; }
+        }
         else if (["remove", "remove-project", "delete", "delete-project"].includes(payload.action)) result = removeProject(String(payload.id || payload.project_id || ""), { force: false });
         else if (payload.action === "defaults") result = setSupervisorDefaults(payload.defaults || {});
         else { json(res, 400, { ok: false, error: "unknown supervisor action" }); return; }
@@ -1493,6 +1705,113 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         json(res, 200, run);
         return;
       }
+      if (url.pathname === '/api/intake/connections' && ['GET', 'POST'].includes(req.method) || /^\/api\/intake\/connections\/[0-9a-f-]+(?:\/(?:check|credential))?$/.test(url.pathname) && ['PATCH', 'DELETE', 'POST'].includes(req.method)) {
+        let payload = {};
+        try {
+          const ownerCookie = String(req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith('atl_owner='))?.slice(10);
+          if (!validateOwnerSession(root, decodeURIComponent(ownerCookie || ''), String(req.headers['x-atl-csrf'] || '')) || req.headers.origin && !isSameLoopbackOrigin(req, server)) { json(res, 403, { ok: false, error: 'An authenticated owner session is required for issue connections.' }); return; }
+          const data = loadConnections(root, readManagerConfig(root).intake || {});
+          const parts = url.pathname.split('/');
+          const id = parts[4];
+          const index = id ? data.connections.findIndex(c => c.id === id) : -1;
+          if (id && index < 0) { json(res, 404, { ok: false, error: 'Connection not found.' }); return; }
+          if (req.method === 'GET') { json(res, 200, { ok: true, ...data, connections: data.connections.map(c => ({ ...c, token_present: c.provider === 'github' ? Boolean(githubUiToken || process.env.GITHUB_TOKEN) : c.provider === 'jira' ? Boolean(jiraConnectionTokens.has(c.id) || process.env[c.settings.token_env]) : Boolean(process.env[c.settings.token_env]) || c.provider === 'azure' && (c.credential_ref === 'os-protected' || azureConnectionTokens.has(c.id) || c.id === data.defaults.azure && Boolean(azureUiToken)) })) }); return; }
+          if (run.status === 'running' || planningRunActive(root)) { json(res, 409, { ok: false, error: 'Wait for the active run before changing issue sources.' }); return; }
+          payload = JSON.parse(await readBody(req) || '{}');
+          if (payload.revision !== data.revision) { json(res, 409, { ok: false, error: 'Connections changed. Refresh and try again.' }); return; }
+          if (req.method === 'POST' && !id) {
+            const parsed = validateConnection(payload);
+            if (data.connections.some(c => sameConnection(c, parsed))) { json(res, 409, { ok: false, error: 'This location is already connected.' }); return; }
+            const record = { id: crypto.randomUUID(), ...parsed, status: 'unchecked', checked_at: null };
+            data.connections.push(record);
+            data.defaults[record.provider] ||= record.id;
+            saveConnections(root, data, payload.revision);
+            json(res, 201, { ok: true, connection: record, revision: data.revision }); return;
+          }
+          if (req.method === 'POST' && parts[5] === 'credential') {
+            if (!req.headers.origin || !isSameLoopbackOrigin(req, server)) { json(res, 403, { ok: false, error: 'Credentials can only be changed from the authenticated ATL UI.' }); return; }
+            const record = data.connections[index];
+            if (!['azure', 'jira'].includes(record.provider)) throw new Error('Credential entry is available for Jira and Azure Boards.');
+            if (record.provider === 'jira') {
+              if (payload.action === 'disconnect') jiraConnectionTokens.delete(id);
+              else {
+                const token = String(payload.token || '').trim();
+                if (!token || token.length > 4096 || /[\r\n]/.test(token)) throw new Error('Enter a valid Jira token.');
+                jiraConnectionTokens.set(id, token);
+              }
+              json(res, 200, { ok: true, revision: data.revision, credential_source: jiraConnectionTokens.has(id) ? 'session' : 'environment' }); return;
+            }
+            if (payload.action === 'disconnect') {
+              azureConnectionTokens.delete(id);
+              forgetAzureConnection(record.settings, { dir: azureCredentialDir(id) });
+              record.credential_ref = null;
+            } else {
+              const token = String(payload.token || '').trim();
+              if (!token || token.length > 4096 || /[\r\n]/.test(token)) throw new Error('Enter a valid Azure PAT.');
+              if (payload.remember === true && !(await dpapiSupported())) throw new Error('Windows credential protection is unavailable here — save without "Remember securely" to keep the credential for this session.');
+              if (payload.remember === true) await saveAzureConnection(record.settings, token, { dir: azureCredentialDir(id) });
+              else forgetAzureConnection(record.settings, { dir: azureCredentialDir(id) });
+              azureConnectionTokens.set(id, token);
+              record.credential_ref = payload.remember === true ? 'os-protected' : 'session';
+            }
+            saveConnections(root, data, payload.revision);
+            json(res, 200, { ok: true, revision: data.revision, credential_source: record.credential_ref }); return;
+          }
+          if (req.method === 'PATCH' && id) {
+            const previous = data.connections[index];
+            const parsed = validateConnection({ ...previous.settings, ...previous, ...payload, provider: previous.provider });
+            if (data.connections.some(c => c.id !== id && sameConnection(c, parsed))) { json(res, 409, { ok: false, error: 'This location is already connected.' }); return; }
+            if (previous.provider === 'azure' && connectionIdentity(previous) !== connectionIdentity(parsed)) {
+              azureConnectionTokens.delete(id);
+              forgetAzureConnection(previous.settings, { dir: azureCredentialDir(id) });
+              previous.credential_ref = null;
+            }
+            if (previous.provider === 'jira' && connectionIdentity(previous) !== connectionIdentity(parsed)) jiraConnectionTokens.delete(id);
+            data.connections[index] = { ...previous, ...parsed, status: 'unchecked', checked_at: null };
+            if (data.defaults[previous.provider] === id && previous.legacy && previous.enabled !== parsed.enabled) {
+              const manager = readManagerConfig(root);
+              manager.intake[previous.provider].enabled = parsed.enabled;
+              const file = path.join(root, 'config', 'manager.json'), temp = `${file}.${crypto.randomUUID()}.tmp`;
+              fs.writeFileSync(temp, JSON.stringify(manager, null, 2) + '\n'); fs.renameSync(temp, file);
+            }
+          } else if (req.method === 'DELETE' && id) {
+            const record = data.connections[index];
+            if (data.defaults[record.provider] === id) {
+              const replacement = data.connections.find(c => c.id !== id && c.provider === record.provider);
+              if (replacement) {
+                data.defaults[record.provider] = replacement.id;
+                const manager = readManagerConfig(root); manager.intake ||= {};
+                manager.intake[record.provider] = record.provider === 'github' ? { enabled: replacement.enabled, repos: [replacement.settings.repo] } : { ...replacement.settings, enabled: replacement.enabled };
+                const file = path.join(root, 'config', 'manager.json'), temp = `${file}.${crypto.randomUUID()}.tmp`;
+                fs.writeFileSync(temp, JSON.stringify(manager, null, 2) + '\n'); fs.renameSync(temp, file);
+              }
+              else if (!record.enabled) data.defaults[record.provider] = null;
+              else { json(res, 409, { ok: false, error: 'Pause this default connection or add another connection before removing it.' }); return; }
+            }
+            if (record.legacy) data.dismissed_legacy.push(connectionIdentity(record));
+            if (record.provider === 'azure') { azureConnectionTokens.delete(id); forgetAzureConnection(record.settings, { dir: azureCredentialDir(id) }); }
+            if (record.provider === 'jira') jiraConnectionTokens.delete(id);
+            data.connections.splice(index, 1);
+          } else if (req.method === 'POST' && parts[5] === 'check') {
+            const record = data.connections[index];
+            const config = readManagerConfig(root);
+            config.intake ||= {};
+            config.intake[record.provider] = record.provider === 'github' ? { enabled: true, repos: [record.settings.repo] } : { ...record.settings, enabled: true };
+            const token = await connectionAzureToken(record) || (record.provider === 'azure' && record.id === data.defaults.azure ? await currentAzureToken() : null);
+            let adapters = record.provider === 'azure' && token ? { ...seam.intakeAdapters, azure: cfg => seam.intakeAdapters.azure ? seam.intakeAdapters.azure(cfg, { token }) : intakeFromAzure(cfg, { token }) } : seam.intakeAdapters;
+            // The session GitHub token is account-scoped: it authenticates the
+            // access check of every github connection, not one saved location.
+            if (record.provider === 'github' && githubUiToken) adapters = { ...adapters, github: cfg => seam.intakeAdapters.github ? seam.intakeAdapters.github(cfg, { token: githubUiToken }) : intakeFromGitHub(cfg, { token: githubUiToken }) };
+            if (record.provider === 'jira' && jiraConnectionTokens.has(id)) adapters = { ...adapters, jira: cfg => seam.intakeAdapters.jira ? seam.intakeAdapters.jira(cfg, { token: jiraConnectionTokens.get(id) }) : intakeFromJira(cfg, { token: jiraConnectionTokens.get(id) }) };
+            try { await runIntake(config, record.provider, adapters); record.status = 'verified'; record.error = null; }
+            catch (error) { const message = redactConnectionSecrets(error.message); record.status = /auth|token|credential|unauthori|forbidden|401|403/i.test(message) ? 'needs-auth' : 'unavailable'; record.error = message.slice(0, 240); }
+            record.checked_at = new Date().toISOString();
+          } else { json(res, 405, { ok: false, error: 'Unsupported connection action.' }); return; }
+          saveConnections(root, data, payload.revision);
+          json(res, 200, { ok: true, connection: data.connections[index] || null, revision: data.revision });
+        } catch (error) { json(res, error.status || 400, { ok: false, error: redactConnectionSecrets(error.message, payload?.token) }); }
+        return;
+      }
       if (url.pathname === "/api/intake/sources" && ["GET", "POST"].includes(req.method)) {
         try {
           if (req.method === "POST") {
@@ -1526,7 +1845,7 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           }
           const intake = readManagerConfig(root).intake || {};
           await currentAzureToken();
-          json(res, 200, { ok: true, sources: { github: { enabled: Boolean(intake.github?.enabled), repos: intake.github?.repos || [] }, jira: { enabled: Boolean(intake.jira?.enabled), base_url: intake.jira?.base_url || "", projects: intake.jira?.projects || [], token_env: intake.jira?.token_env || "JIRA_TOKEN", token_present: Boolean(process.env[intake.jira?.token_env || "JIRA_TOKEN"]) }, azure: { enabled: Boolean(intake.azure?.enabled), org_url: intake.azure?.org_url || "", project: intake.azure?.project || "", iteration_path: intake.azure?.iteration_path || "", token_env: intake.azure?.token_env || "AZDO_PAT", token_present: Boolean(azureUiToken || process.env[intake.azure?.token_env || "AZDO_PAT"]), remember_supported: process.platform === "win32", credential_source: azureUiToken ? (azureRemembered ? "os-protected" : "ui-memory") : process.env[intake.azure?.token_env || "AZDO_PAT"] ? "environment" : "none" } } });
+          json(res, 200, { ok: true, sources: { github: { enabled: Boolean(intake.github?.enabled), repos: intake.github?.repos || [], token_present: Boolean(githubUiToken || process.env.GITHUB_TOKEN), credential_source: githubUiToken ? "ui-memory" : process.env.GITHUB_TOKEN ? "environment" : "none" }, jira: { enabled: Boolean(intake.jira?.enabled), base_url: intake.jira?.base_url || "", projects: intake.jira?.projects || [], token_env: intake.jira?.token_env || "JIRA_TOKEN", token_present: Boolean(process.env[intake.jira?.token_env || "JIRA_TOKEN"]) }, azure: { enabled: Boolean(intake.azure?.enabled), org_url: intake.azure?.org_url || "", project: intake.azure?.project || "", iteration_path: intake.azure?.iteration_path || "", token_env: intake.azure?.token_env || "AZDO_PAT", token_present: Boolean(azureUiToken || process.env[intake.azure?.token_env || "AZDO_PAT"]), remember_supported: await dpapiSupported(), credential_source: azureUiToken ? (azureRemembered ? "os-protected" : "ui-memory") : process.env[intake.azure?.token_env || "AZDO_PAT"] ? "environment" : "none" } } });
         } catch (error) { json(res, 400, { ok: false, error: error.message }); }
         return;
       }
@@ -1544,6 +1863,7 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
             const token = String(payload.token || "").trim();
             if (!token || token.length > 4096 || /[\r\n]/.test(token)) throw new Error("Enter a valid Azure PAT.");
             if (!cfg.org_url || !cfg.project) throw new Error('Save the Azure collection and project first.');
+            if (payload.remember === true && !(await dpapiSupported())) throw new Error('Windows credential protection is unavailable here — save without "Remember securely" to keep the credential for this session.');
             if (payload.remember === true) await saveAzureConnection(cfg, token);
             else forgetAzureConnection(cfg);
             azureUiToken = token; azureRemembered = payload.remember === true;
@@ -1555,18 +1875,57 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         } catch (error) { json(res, 400, { ok: false, error: error.message }); }
         return;
       }
+      if (req.method === "POST" && url.pathname === "/api/intake/credentials/github") {
+        // Session-scoped GitHub token entry for private repositories: held in
+        // server memory only — never written to config, state, or disk. The
+        // persistent paths stay "gh auth login" and the GITHUB_TOKEN variable.
+        try {
+          const expectedOrigin = `http://${req.headers.host}`;
+          const ownerCookie = String(req.headers.cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith("atl_owner="))?.slice("atl_owner=".length);
+          if (req.headers.origin !== expectedOrigin || !validateOwnerSession(root, decodeURIComponent(ownerCookie || ""), String(req.headers["x-atl-csrf"] || ""))) {
+            json(res, 403, { ok: false, error: "GitHub credentials can only be changed from the authenticated ATL UI." }); return;
+          }
+          const payload = JSON.parse(await readBody(req) || "{}");
+          if (payload.action === "disconnect") githubUiToken = null;
+          else {
+            const token = String(payload.token || "").trim();
+            if (!token || token.length > 255 || /[\r\n]/.test(token)) throw new Error("Enter a valid GitHub token.");
+            githubUiToken = token;
+          }
+          json(res, 200, { ok: true, token_present: Boolean(githubUiToken || process.env.GITHUB_TOKEN), credential_source: githubUiToken ? "ui-memory" : process.env.GITHUB_TOKEN ? "environment" : "none" });
+        } catch (error) { json(res, 400, { ok: false, error: error.message }); }
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/intake/azure/iterations") {
         // Sprint combobox feed: the read-only iteration tree from the saved
         // connection. Names, paths and dates only — never credentials.
         try {
-          const cfg = readManagerConfig(root).intake?.azure || {};
+          const connectionId = url.searchParams.get('connection_id');
+          let connection = null, connections = null;
+          if (connectionId) {
+            const ownerCookie = String(req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith('atl_owner='))?.slice('atl_owner='.length);
+            if (!validateOwnerSession(root, decodeURIComponent(ownerCookie || ''), String(req.headers['x-atl-csrf'] || ''))) { json(res, 403, { ok: false, error: 'An authenticated owner session is required for issue connections.' }); return; }
+            connections = loadConnections(root, readManagerConfig(root).intake || {});
+            connection = connections.connections.find(item => item.id === connectionId);
+            if (!connection || connection.provider !== 'azure') throw new Error('Azure connection not found. Refresh sources.');
+            if (!connection.enabled) throw new Error('Resume this connection before loading its sprints.');
+          }
+          const legacy = readManagerConfig(root).intake?.azure || {};
+          const sameAzure = connection && legacy.org_url === connection.settings.org_url && legacy.project === connection.settings.project;
+          const cfg = connection ? { ...(sameAzure ? legacy : {}), ...connection.settings } : legacy;
           if (!cfg.org_url || !cfg.project) throw new Error("Save the Azure collection and project first.");
           await currentAzureToken();
-          const token = azureUiToken || process.env[cfg.token_env || "AZDO_PAT"];
+          const token = connection ? await connectionAzureToken(connection) || (connection.id === connections.defaults.azure ? azureUiToken : null) : azureUiToken || process.env[cfg.token_env || "AZDO_PAT"];
           if (!token) throw new Error("Connect Azure Boards first — the sprint list comes from your saved connection.");
           const iterationsUrl = `${cfg.org_url.replace(/\/$/, "")}/${encodeURIComponent(cfg.project)}/_apis/wit/classificationnodes/iterations?$depth=2&api-version=7.1-preview.1`;
           const authHeaders = { authorization: "Basic " + Buffer.from(`:${token}`).toString("base64") };
-          const callAzure = (link) => (seam.azureFetch || fetch)(link, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+          const callAzure = async (link) => {
+            if (cfg.tls_allow_untrusted && seam.azureFetch === globalThis.fetch) {
+              try { return { ok: true, status: 200, data: await requestJson(link, { headers: authHeaders, allowUntrusted: true }) }; }
+              catch (error) { return { ok: false, status: 400, data: { message: error.message } }; }
+            }
+            return (seam.azureFetch || globalThis.fetch)(link, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+          };
           // Seam contract: fetch-compatible (Response). Transport-style seams
           // ({ data, status }) — the myTasksFetch convention — are accepted too.
           const readJson = async (response) => (typeof response.json === "function" ? await response.json().catch(() => ({})) : (response.data ?? {}));
@@ -1584,7 +1943,7 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           const iterations = [];
           const walk = (node, prefix) => {
             for (const child of node.children || []) {
-              const iterationPath = `${prefix}\\${child.name}`;
+              const iterationPath = child.path || `${prefix}\\${child.name}`;
               iterations.push({ name: child.name, path: iterationPath, start: child.attributes?.startDate || null, finish: child.attributes?.finishDate || null });
               if (child.hasChildren) walk(child, iterationPath);
             }
@@ -1593,15 +1952,20 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           json(res, 200, { ok: true, iterations });
         } catch (error) {
           const message = String(error?.message || "Could not list Azure sprints");
-          json(res, 400, { ok: false, error: azureUiToken ? message.split(azureUiToken).join("[redacted]") : message });
+          json(res, 400, { ok: false, error: redactConnectionSecrets(message) });
         }
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/intake/preview") {
         try {
-          const payload = JSON.parse(await readBody(req) || "{}"), source = String(payload.source || "");
+          const payload = JSON.parse(await readBody(req) || "{}");
+          const connections = payload.connection_id ? loadConnections(root, readManagerConfig(root).intake || {}) : null;
+          const connection = connections?.connections.find(c => c.id === payload.connection_id);
+          if (payload.connection_id && !connection) throw new Error('Connection not found. Refresh sources.');
+          const source = connection?.provider || String(payload.source || "");
           if (!["github", "jira", "azure"].includes(source)) throw new Error("Choose GitHub, Jira, or Azure Boards.");
           const config = readManagerConfig(root);
+          if (connection) { config.intake ||= {}; const legacy = config.intake[source] || {}; const sameAzure = source === 'azure' && legacy.org_url === connection.settings.org_url && legacy.project === connection.settings.project; config.intake[source] = source === 'github' ? { enabled: connection.enabled, repos: [connection.settings.repo] } : { ...(sameAzure ? legacy : {}), ...connection.settings, enabled: connection.enabled }; }
           if (!config.intake?.[source]?.enabled) throw new Error(`${source} source is not enabled.`);
           if (source === 'azure') {
             await currentAzureToken();
@@ -1615,6 +1979,8 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
               }
               if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('Enter a positive work item number or an Azure work item link.');
               cfg.work_item_id = Number(value); delete cfg.wiql;
+            } else if (payload.all_iterations === true) {
+              cfg.all_iterations = true; delete cfg.wiql; delete cfg.work_item_id;
             } else if (payload.iteration_path != null) {
               const iteration = String(payload.iteration_path).trim();
               // A pasted taskboard URL like .../_sprints/taskboard/…/Sprint%2074?workitem=6340
@@ -1631,16 +1997,25 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
             }
             config.intake = { ...config.intake, azure: cfg };
           }
-          const adapters = source === "azure" && azureUiToken
+          const connectionToken = connection ? await connectionAzureToken(connection) : null;
+          let adapters = source === "azure" && connection && connectionToken
+            ? { ...seam.intakeAdapters, azure: cfg => seam.intakeAdapters.azure ? seam.intakeAdapters.azure(cfg, { token: connectionToken }) : intakeFromAzure(cfg, { token: connectionToken }) }
+            : source === "azure" && azureUiToken && (!connection || connection.id === connections.defaults.azure)
             ? { ...seam.intakeAdapters, azure: (cfg) => seam.intakeAdapters.azure ? seam.intakeAdapters.azure(cfg, { token: azureUiToken }) : intakeFromAzure(cfg, { token: azureUiToken }) }
             : seam.intakeAdapters;
+          if (source === "github" && githubUiToken) adapters = { ...adapters, github: (cfg) => seam.intakeAdapters.github ? seam.intakeAdapters.github(cfg, { token: githubUiToken }) : intakeFromGitHub(cfg, { token: githubUiToken }) };
+          if (source === 'jira' && connection && jiraConnectionTokens.has(connection.id)) adapters = { ...adapters, jira: cfg => seam.intakeAdapters.jira ? seam.intakeAdapters.jira(cfg, { token: jiraConnectionTokens.get(connection.id) }) : intakeFromJira(cfg, { token: jiraConnectionTokens.get(connection.id) }) };
           const results = await runIntake(config, source, adapters);
           const candidates = results.flatMap((entry) => entry.tasks);
-          const token = crypto.randomUUID(); intakePreviews.set(token, { source, candidates, at: Date.now(), selection: { work_item: source === 'azure' ? String(payload.work_item || '') : '', iteration: config.intake[source]?.iteration_path || '', project: config.intake[source]?.project || '' } });
-          json(res, 200, { ok: true, token, candidates: candidates.map((item, index) => ({ index, title: item.title, objective_hint: item.objective_hint, source: item.source, priority: item.priority })) });
+          const token = crypto.randomUUID(); intakePreviews.set(token, { source, connection_id: connection?.id || null, connection_identity: connection ? connectionIdentity(connection) : null, candidates, at: Date.now(), selection: { work_item: source === 'azure' ? String(payload.work_item || '') : '', iteration: config.intake[source]?.iteration_path || '', project: config.intake[source]?.project || '' } });
+          json(res, 200, { ok: true, token, candidates: candidates.map((item, index) => ({ index, title: item.title, objective_hint: item.objective_hint, source: item.source, priority: item.priority, labels: item.labels || [], state: item.state || item.source?.state || (source === 'azure' ? item.labels?.[0] : null) || "Open" })) });
         } catch (error) {
-          const message = String(error?.message || "Issue search failed");
-          json(res, 400, { ok: false, error: azureUiToken ? message.split(azureUiToken).join("[redacted]") : message });
+          let message = String(error?.message || "Issue search failed");
+          // Never echo a session credential or a saved connection secret back
+          // in an error message.
+          if (azureUiToken) message = message.split(azureUiToken).join("[redacted]");
+          if (githubUiToken) message = message.split(githubUiToken).join("[redacted]");
+          json(res, 400, { ok: false, error: redactConnectionSecrets(message) });
         }
         return;
       }
@@ -1692,6 +2067,11 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           const queueId = String(payload.queueId || `${preview.source}-intake`).toLowerCase();
           if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(queueId)) throw new Error("Queue id must use letters, numbers, _ or -.");
           const state = loadState(root), selected = ids.map((id) => preview.candidates[id]);
+          if (preview.connection_id) {
+            const connection = loadConnections(root, readManagerConfig(root).intake || {}).connections.find(c => c.id === preview.connection_id);
+            if (!connection || !connection.enabled || connectionIdentity(connection) !== preview.connection_identity) throw new Error('Connection changed or was removed. Preview again.');
+            for (const candidate of selected) candidate.source = { ...candidate.source, connection_id: connection.id, connection_name: connection.name };
+          }
           // Optional repository bindings (spec 020 / multi-repo): an import
           // may target several registered repositories at once — one request
           // from a product team can affect frontend and backend together.
@@ -1703,7 +2083,7 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           const imported = importCandidates(root, state, selected, { cfg: readManagerConfig(root), repositoryIds });
           state.intake_history ||= [];
           const repositoryNames = (id) => ({ id, name: registered.find((entry) => entry.id === id)?.name || null });
-          const record = { id: crypto.randomUUID(), at: new Date().toISOString(), source: preview.source, selection: preview.selection || {}, destination: payload.destination === 'planning' ? 'planning' : queueId, repository: repositoryIds[0] || null, repositories: repositoryIds.map(repositoryNames), added: imported.added, skipped: imported.skipped, items: selected.map(c => ({ title: c.title, source: c.source, taskId: Object.values(state.tasks).find(t => t.intake_key === c.intake_key)?.id || null })) };
+          const record = { id: crypto.randomUUID(), at: new Date().toISOString(), source: preview.source, connection_id: preview.connection_id || null, selection: preview.selection || {}, destination: payload.destination === 'planning' ? 'planning' : queueId, repository: repositoryIds[0] || null, repositories: repositoryIds.map(repositoryNames), added: imported.added, skipped: imported.skipped, items: selected.map(c => ({ title: c.title, source: c.source, taskId: Object.values(state.tasks).find(t => t.intake_key === c.intake_key)?.id || null })) };
           state.intake_history.push(record);
           saveState(root, state, { expectedRevision: state.revision || 0 });
           if (payload.destination !== 'planning') {
@@ -1711,6 +2091,11 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
             for (const item of imported.created) queueAdd(root, item.task.id, { queueId });
           }
           intakePreviews.delete(String(payload.token));
+          // A mutation must be readable immediately (same contract as
+          // /api/command): drop the cached delta frame so a cursor-holding
+          // poller cannot be told "unchanged" across this import — otherwise
+          // a Plan click on the fresh card silently misses the new task.
+          cachedFrame = null;
           json(res, 200, { ok: true, queueId: payload.destination === 'planning' ? null : queueId, added: imported.added, skipped: imported.skipped, taskIds: imported.created.map((item) => item.task.id), record });
         } catch (error) { json(res, 400, { ok: false, error: error.message }); }
         return;
@@ -1768,6 +2153,7 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
           logEvent(state, { task: task.id, actor: "owner", event: "intake_repository_changed", detail: `${previous.map(nameOf).join(", ") || "unassigned"} -> ${targets.map((project) => project.name).join(", ") || "unassigned"}` });
           state.updated_at = new Date().toISOString();
           saveState(root, state, { expectedRevision: state.revision || 0 });
+          cachedFrame = null; // immediate readability, same contract as /api/command
           json(res, 200, { ok: true, taskId: task.id, repositoryIds: targets.map((project) => project.id), repositories: targets.map((project) => ({ id: project.id, name: project.name })), repositoryId: targets[0]?.id || null, repositoryName: targets[0]?.name || null, previousRepositoryId: previous[0] || null, previousRepositoryIds: previous, needsPlan: Boolean(task.plan_review_required) });
         } catch (error) { json(res, error.statusCode || 400, { ok: false, error: error.message }); }
         return;
@@ -1838,6 +2224,68 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         json(res, 200, { ok: true, budget });
         return;
       }
+      if (req.method === "POST" && url.pathname.startsWith("/api/harness/")) {
+        const payload = JSON.parse(await readBody(req) || "{}");
+        const operation = url.pathname.slice('/api/harness/'.length);
+        try {
+          if (operation === 'project/bootstrap') return json(res, 200, { ok: true, repository: bootstrapRepository(root, payload) });
+          if (operation === 'program/save') return json(res, 200, { ok: true, program: saveProgram(root, payload) });
+          if (operation === 'program/status') return json(res, 200, { ok: true, program: payload.programId ? programReport(root, payload.programId) : listPrograms(root) });
+          if (operation === 'program/approve') return json(res, 200, { ok: true, program: approveProgram(root, payload) });
+          if (operation === 'program/reconcile') return json(res, 200, { ok: true, program: resolveProgramInterruption(root, payload.programId, payload) });
+          if (operation === 'program/link') return json(res, 200, { ok: true, ...linkProgramTasks(root, payload) });
+          if (operation === 'program/bind') {
+            const program = await bindProgramMilestone(root, payload, { link: async (target, linkPayload) => {
+              if (canonicalRoot(target) === canonicalRoot(root)) return linkProgramTasks(root, linkPayload);
+              const { ensureDaemon } = await import('./daemon.mjs');
+              const daemon = await ensureDaemon(target);
+              const response = await fetch(new URL('/api/harness/program/link', daemon.url), {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(linkPayload)});
+              const result = await response.json(); if(!response.ok || result.ok === false) throw new Error(result.error || 'Project binding failed');
+              return result;
+            } });
+            return json(res, 200, { ok: true, program });
+          }
+          if (operation === 'program/start') {
+            const program = beginProgramRun(root, payload);
+            void driveProgram(root, program.id).catch(error => console.error('[program]', error.message));
+            return json(res, 202, { ok: true, program });
+          }
+          if (operation === 'program/stop') return json(res, 200, { ok: true, program: stopProgramRun(root, payload.programId) });
+          if (operation === 'plan/context') return json(res, 200, { ok: true, ...harnessPlanContext(root, payload) });
+          if (operation === 'plan/save') return json(res, 200, { ok: true, draft: saveHarnessPlan(root, payload) });
+          if (operation === 'plan/answer') return json(res, 200, { ok: true, draft: answerHarnessPlan(root, payload) });
+          if (operation === 'plan/review' || operation === 'plan/approve') {
+            assertHarnessRevision(root, payload);
+            if (operation === 'plan/review' && payload.confirm !== true) throw new Error('Review provider spend requires explicit confirmation');
+            if (operation === 'plan/approve' && (payload.confirm !== true || !payload.idempotencyKey)) throw new Error('Plan approval needs explicit confirmation and an idempotency key');
+            if (operation === 'plan/approve') claimPlanApproval(root, payload);
+            const adapted = Readable.from([JSON.stringify(payload)]);
+            adapted.headers = req.headers;
+            adapted.method = 'POST';
+            return await handlePlanEndpoint(root, res, `/api/${operation}`, adapted, seam);
+          }
+          if (operation === 'run/preview') {
+            const options = { queueId: payload.queueId || null, taskIds: payload.taskIds || null, maxMinutes: payload.maxMinutes, maxSessions: payload.maxSessions };
+            const preview = resolvePreviewSafe(root, options);
+            if (preview.error) throw new Error(preview.error);
+            return json(res, 200, { ok: true, ...createRunPreview(root, options, preview.preview), lines: previewLines(preview.preview) });
+          }
+          if (operation === 'run/start') {
+            const options = consumeRunPreview(root, payload);
+            if (options.replay) return json(res, 200, { ok: true, replayed: true, accepted: true, runId: options.run_id || null, next_actions: ['run/status'] });
+            consumedRunPreview = payload.previewToken;
+            const adapted = Readable.from([JSON.stringify({ ...options, confirm: true })]);
+            adapted.headers = req.headers;
+            adapted.method = 'POST';
+            req = adapted;
+            url.pathname = '/api/run';
+          } else if (operation === 'run/stop') {
+            url.pathname = '/api/run/stop';
+          } else if (operation === 'run/status') {
+            return json(res, 200, { ok: true, run, durable: readOvernightRun(root) });
+          } else throw new Error('Unknown harness operation');
+        } catch (error) { return json(res, error.statusCode || 400, { ok: false, error: error.message, next_actions: ['reload_context'] }); }
+      }
       if (req.method === "POST" && url.pathname === "/api/run/preview") {
         const payload = JSON.parse(await readBody(req) || "{}");
         const resolved = resolvePreviewSafe(root, {
@@ -1902,7 +2350,9 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         // A queue owns its complete bounded relay; multi-queue runs share one
         // budget across their selected queues.
         const defaultSessions = 8;
-        Object.assign(run, { status: "running", queueId: runQueueLabel, taskIds, queueIds, startedAt: new Date().toISOString(), finishedAt: null, progress: [], results: [], error: null, reason: null });
+        const runId=crypto.randomUUID();
+        if(consumedRunPreview)markRunPreviewStarted(root,consumedRunPreview,runId);
+        Object.assign(run, { status: "running", runId, queueId: runQueueLabel, taskIds, queueIds, startedAt: new Date().toISOString(), finishedAt: null, progress: [], results: [], error: null, reason: null });
         executeLaunchQueue(root, {
           confirm: true,
           queueId: taskIds || queueIds ? null : (payload.queueId || null),
@@ -1922,6 +2372,8 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/run/stop") {
+        const payload = JSON.parse(await readBody(req) || "{}");
+        if (payload.runId && payload.runId !== run.runId) { json(res, 409, { ok: false, error: "The active run changed; refusing to stop another run.", run }); return; }
         if (run.status !== "running") {
           json(res, 409, { ok: false, error: "no queue run is active", run });
           return;
@@ -1932,7 +2384,47 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/health") {
-        json(res, 200, { ok: true, service: "atl-control-plane" });
+        json(res, 200, { ok: true, service: "atl-control-plane", project: projectIdentity, pid: process.pid, runtime });
+        return;
+      }
+      // One state owner (issue #34): the daemon status and exclusive writer
+      // lease surface. Clients discover and lease through these; the lease
+      // token is what state.mjs's synchronous writer gate verifies.
+      if (req.method === "GET" && url.pathname === "/api/daemon") {
+        try { json(res, 200, { ok: true, ...(await daemonStatus(root)) }); }
+        catch (error) { json(res, 500, { ok: false, error: error.message }); }
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/daemon/lease") {
+        try {
+          const payload = JSON.parse(await readBody(req) || "{}");
+          const lease = grantLeaseRecord(root, { pid: payload.pid, argv: payload.argv, ttlMs: payload.ttl_ms });
+          json(res, 200, { ok: true, token: lease.lease.token, expires_at: lease.lease.expires_at, pid: lease.lease.pid });
+        } catch (error) { json(res, error.statusCode || 500, { ok: false, error: error.message }); }
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/daemon/lease/renew") {
+        try {
+          const payload = JSON.parse(await readBody(req) || "{}");
+          const record = renewLeaseRecord(root, String(payload.token || ""), { ttlMs: payload.ttl_ms });
+          json(res, 200, { ok: true, expires_at: record.lease.expires_at });
+        } catch (error) { json(res, error.statusCode || 500, { ok: false, error: error.message }); }
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/daemon/lease/release") {
+        try {
+          const payload = JSON.parse(await readBody(req) || "{}");
+          releaseLeaseRecord(root, String(payload.token || ""));
+          json(res, 200, { ok: true });
+        } catch (error) { json(res, error.statusCode || 500, { ok: false, error: error.message }); }
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/daemon/shutdown") {
+        json(res, 202, { ok: true, stopping: true });
+        setTimeout(() => {
+          try { server.close(() => process.exit(0)); } catch { /* already closed */ }
+          setTimeout(() => process.exit(0), 1500).unref?.();
+        }, 120);
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/providers") {
@@ -1970,7 +2462,13 @@ export function createControlPlaneServer(root, { host = "127.0.0.1", planningInv
       else console.error("[control-plane] post-response error:", error && error.stack || error);
     }
   });
-  server.once("close", () => { myTasks.stop(); reviews.stop(); triage.stop(); void jira.stop(); }); // schedulers die with the service
+  server.once("close", () => { myTasks.stop(); reviews.stop(); triage.stop(); void jira.stop(); clearOwnerSession(root, ownerSession.token); }); // schedulers and owner session die with the service
+  // Owner-lifecycle observability for the `ui` command's daemon loop
+  // (heartbeat + idle exit). Reads live server state without HTTP.
+  server.atlObservability = {
+    lastRequestAt: () => lastRequestAt,
+    streamCount: () => streams.size + (programRunnerActive(root) ? 1 : 0),
+  };
   return server;
 }
 
@@ -1982,5 +2480,6 @@ export async function startControlPlaneServer(root, { host = "127.0.0.1", port =
   });
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
+  void resumePersistedPrograms(root).catch(error => console.error('[program recovery]', error.message));
   return { server, host, port: actualPort, url: `http://${host}:${actualPort}/` };
 }

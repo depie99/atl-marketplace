@@ -4,7 +4,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { latestTaskEvidence } from "./task-diagnostics.mjs";
+import { writerGate } from "./daemon.mjs";
 
 const contractFile = new URL("../../config/manager-state-contract.json", import.meta.url);
 export const STATE_CONTRACT = JSON.parse(fs.readFileSync(contractFile, "utf8"));
@@ -43,11 +45,19 @@ export function emptyState() {
   };
 }
 
+// True once this process successfully wrote state.json. The CLI's lease
+// self-heal (issue #34) reruns a denied command only when this is false, so
+// an ownership change mid-command never re-executes partial work.
+let wroteSinceBoot = false;
+export function hasWrittenState() {
+  return wroteSinceBoot;
+}
+
 export function loadState(root) {
   const p = paths(root).state;
   if (!fs.existsSync(p)) {
     throw new StateError(
-      `No state file at ${p}. Run: node runtime\\atl-manager.mjs init`
+      `No state file at ${p}. Run: atl init`
     );
   }
   const state = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -57,17 +67,97 @@ export function loadState(root) {
   return state;
 }
 
+// Windows note: under contention openSync("wx") reports EPERM (not EEXIST)
+// when another process is creating or removing the same lock path, and rename
+// fails with EPERM while a reader still holds the destination open.
+function acquireLock(lock, label) {
+  const deadline = Date.now() + 10000;
+  let lockFd;
+  while (lockFd === undefined) {
+    try {
+      lockFd = fs.openSync(lock, "wx", 0o600);
+      fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, created_at: Date.now() }));
+    } catch (error) {
+      if (error.code !== "EEXIST" && error.code !== "EPERM") throw error;
+      try {
+        const owner = JSON.parse(fs.readFileSync(lock, "utf8"));
+        let alive = true;
+        try { process.kill(owner.pid, 0); } catch (probe) { alive = probe.code === "EPERM"; }
+        if (!alive && Date.now() - Number(owner.created_at || 0) > 1000) fs.rmSync(lock, { force: true });
+      } catch { /* A newly-created lock may not have its metadata yet. */ }
+      if (Date.now() >= deadline) throw new StateError(`Timed out waiting for ${label} lock ${lock}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  return lockFd;
+}
+
+// Only remove a lock whose recorded owner is this process: a stolen lock path
+// must never be deleted out from under its new owner.
+function releaseLock(lock) {
+  try {
+    const owner = JSON.parse(fs.readFileSync(lock, "utf8"));
+    if (owner.pid !== process.pid) return;
+  } catch { return; }
+  fs.rmSync(lock, { force: true });
+}
+
 export function saveState(root, state, { expectedRevision = null } = {}) {
   const p = paths(root).state;
-  const current = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null;
-  if (expectedRevision != null && (current?.revision || 0) !== expectedRevision) throw new StateError(`state revision conflict: expected ${expectedRevision}, found ${current?.revision || 0}`);
+  // One state owner (issue #34): when a live project daemon owns this
+  // project, only the owner itself or a holder of the owner's writer lease
+  // may write state.json. The file lock + revision CAS below remain the last
+  // line of defense for the bootstrap path (no live daemon) and for holders.
+  const gate = writerGate(root);
+  if (gate.verdict === "denied") throw new StateError(gate.message);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  state.updated_at = new Date().toISOString();
-  state.revision = (current?.revision || state.revision || 0) + 1;
-  if (state.log.length > 500) state.log = state.log.slice(-500);
-  const tmp = p + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
-  fs.renameSync(tmp, p);
+  const lock = `${p}.lock`;
+  const lockFd = acquireLock(lock, "state");
+  try {
+    const current = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null;
+    const expected = expectedRevision ?? state.revision ?? 0;
+    if ((current?.revision || 0) !== expected)
+      throw new StateError(`state revision conflict: expected ${expected}, found ${current?.revision || 0}; reload state and retry`);
+    state.updated_at = new Date().toISOString();
+    state.revision = (current?.revision || state.revision || 0) + 1;
+    if (state.log.length > 500) state.log = state.log.slice(-500);
+    const tmp = `${p}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
+      for (let attempt = 0; ; attempt++) {
+        try { fs.renameSync(tmp, p); break; }
+        catch (error) {
+          if (error.code !== "EPERM" || attempt >= 6) throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15 * (attempt + 1));
+        }
+      }
+    } finally { fs.rmSync(tmp, { force: true }); }
+    wroteSinceBoot = true;
+  } finally {
+    fs.closeSync(lockFd);
+    releaseLock(lock);
+  }
+}
+
+// Read-modify-write with retry: reloads and re-runs the mutator when another
+// writer won the race (issue #31 — concurrent composes must not lose tasks).
+// The mutator must be idempotent enough to re-run; compose/intake are
+// idempotent by content/intake_key.
+export function mutateState(root, mutator, { attempts = 64 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.floor(Math.min(250, 10 + Math.random() * 20 * attempt)));
+    const state = loadState(root);
+    const result = mutator(state);
+    try {
+      saveState(root, state);
+      return { state, result };
+    } catch (error) {
+      if (error instanceof StateError && /revision conflict/.test(error.message)) { lastError = error; continue; }
+      throw error;
+    }
+  }
+  throw new StateError(`state kept changing under ${attempts} attempts; ${lastError?.message || "retry later"}`);
 }
 
 export function nextTaskId(state) {

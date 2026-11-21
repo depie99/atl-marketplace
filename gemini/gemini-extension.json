@@ -1,6 +1,6 @@
 {
   "name": "agent-trust-ladder",
-  "version": "0.6.16",
+  "version": "0.6.21",
   "mcpServers": {
     "atl": {
       "command": "node",

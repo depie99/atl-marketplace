@@ -94,7 +94,7 @@ try {
   // compact navigation, keeps detail navigation working and follows host theme.
   assert.equal(await frame.locator('html').evaluate(el => el.dataset.atlContext), 'plugin', 'panel-entry must mark the plugin presentation context');
   assert.equal(await frame.locator('html').evaluate(el => el.classList.contains('light')), false, 'host without a theme defaults to dark');
-  for (const destination of ['tasks', 'attention', 'activity', 'more']) await frame.locator(`#mobile [data-page="${destination}"]`).first().waitFor();
+  for (const destination of ['tasks', 'attention', 'studio', 'more']) await frame.locator(`#mobile [data-page="${destination}"]`).first().waitFor();
   assert.equal(await frame.locator('.sidebar').evaluate(el => getComputedStyle(el).display), 'none', 'plugin hides the browser sidebar');
   const created = await frame.locator('body').evaluate(async () => {
     const csrf = document.querySelector('meta[name="atl-csrf"]').content;
@@ -105,6 +105,9 @@ try {
   await frame.locator('[data-task] .task-main-copy').first().click();
   await frame.locator('.plugin-task-pane').first().waitFor();
   await page.setViewportSize({ width: 420, height: 760 });
+  // Re-enter the tasks list after resizing so the harness exercises its
+  // narrow-screen task-to-detail navigation rather than stale desktop DOM.
+  await frame.locator('#mobile [data-page="tasks"]').first().click();
   await frame.locator('[data-task] .task-main-copy').first().click();
   await frame.locator('.task-detail-screen').waitFor();
   await frame.locator('[data-action="plugin-back"]').first().click();

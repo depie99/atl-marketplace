@@ -6,7 +6,7 @@ const source = fs.readFileSync(new URL('../runtime/control-plane-client.js', imp
 const decisions = [];
 const resumed = [];
 const pending = { id: 'AP-task', status: 'pending', digest: 'fingerprint-task', created_at: '2026-10-27T06:00:00Z',
-  action: { operation: 'run.queue', project: 'D:/Projects/ATL', target: 'selected', args: { taskIds: ['T-018'] } } };
+  action: { operation: 'run.queue', project: '${PROJECTS}', target: 'selected', args: { taskIds: ['T-018'] } } };
 const queueRequest = { ...pending, id: 'AP-queue', action: { ...pending.action, target: 'persian', args: {} } };
 const scope = vm.createContext({
   pendingApprovalAction: null,
@@ -32,7 +32,7 @@ for (const name of ['statusLabel', 'badge', 'approvalSummary', 'approvalCard', '
 
 let card = scope.approvalCard(pending);
 assert.match(card, /Build Persian catalog/);
-assert.match(card, /D:\/Projects\/ATL/);
+assert.match(card, /(\$\{PROJECTS\}|${PROJECTS})/);
 assert.match(card, /does not start a run from this page/);
 assert.doesNotMatch(card.split('<details>')[0], /fingerprint-task|run\.queue/);
 assert.match(card, /<summary>Technical details<\/summary>/);
